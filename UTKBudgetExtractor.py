@@ -179,8 +179,12 @@ with open('budgetDefs.tex', 'w') as outputFile:
         if not val:
             val = ""
         try:
-            if math.modf(float(val))[0]:
-                val = "%.2f" % val
+            # if math.modf(float(val))[0]:
+            #     val = "%.2f" % val
+            if float(val):
+                # val = "%.2f" % val
+                val = '{:,.2f}'.format(val)
+                # val = "0"
         except:
             pass
         
