@@ -140,30 +140,30 @@ commandDict[f"TravelTotal"]             = ws[f"Q75"].value
 
 commandDict[f"SuppliesTotal"]           = ws[f"Q80"].value
 
-commandDict[f"TuitionYearOne"]          = ws[f"L91"].value
-commandDict[f"TuitionYearTwo"]          = ws[f"M91"].value
-commandDict[f"TuitionYearThree"]        = ws[f"N91"].value
-commandDict[f"TuitionYearFour"]         = ws[f"O91"].value
-commandDict[f"TuitionYearFive"]         = ws[f"P91"].value
-commandDict[f"TuitionTotal"]            = ws[f"Q91"].value
+commandDict[f"TuitionYearOne"]          = ws[f"L94"].value
+commandDict[f"TuitionYearTwo"]          = ws[f"M94"].value
+commandDict[f"TuitionYearThree"]        = ws[f"N94"].value
+commandDict[f"TuitionYearFour"]         = ws[f"O94"].value
+commandDict[f"TuitionYearFive"]         = ws[f"P94"].value
+commandDict[f"TuitionTotal"]            = ws[f"Q94"].value
 
-commandDict[f"OtherDirectTotal"]        = ws[f"Q92"].value
+commandDict[f"OtherDirectTotal"]        = ws[f"Q95"].value
 
 # Section H
 
-commandDict[f"DirectTotal"]             = ws[f"Q94"].value
+commandDict[f"DirectTotal"]             = ws[f"Q97"].value
 
 # Section I
 
-commandDict[f"OverheadRate"]            = ws[f"L98"].value * 100 #percent
+commandDict[f"OverheadRate"]            = ws[f"L101"].value * 100 #percent
 
 # Section J
 
-commandDict[f"IndirectTotal"]           = ws[f"Q99"].value
+commandDict[f"IndirectTotal"]           = ws[f"Q102"].value
 
 # Section K
 
-commandDict[f"Total"]                   = ws[f"Q100"].value
+commandDict[f"Total"]                   = ws[f"Q103"].value
 
 
 with open('budgetDefs.tex', 'w') as outputFile:
