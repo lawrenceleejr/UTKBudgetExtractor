@@ -15,7 +15,7 @@ loc = sys.argv[1]
 # `data_only=True` forces it to calculate all formulas
 
 wb = load_workbook(filename = loc, data_only=True)
-ws = wb.active
+ws = wb['UTK Budget']
 
 commandDict = OrderedDict()
 
