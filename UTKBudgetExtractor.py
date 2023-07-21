@@ -136,6 +136,14 @@ commandDict[f"DomesticTravelTotal"]     = ws[f"Q73"].value
 commandDict[f"InternationalTravelTotal"]= ws[f"Q74"].value
 commandDict[f"TravelTotal"]             = ws[f"Q75"].value
 
+# Section F
+commandDict[f"ParticipantSupportYearOne"]   = ws[f"L77"].value
+commandDict[f"ParticipantSupportYearTwo"]   = ws[f"M77"].value
+commandDict[f"ParticipantSupportYearThree"] = ws[f"N77"].value
+commandDict[f"ParticipantSupportYearFour"]  = ws[f"O77"].value
+commandDict[f"ParticipantSupportYearFive"]  = ws[f"P77"].value
+commandDict[f"ParticipantSupportTotal"]     = ws[f"Q77"].value
+
 # Section G
 
 commandDict[f"SuppliesTotal"]           = ws[f"Q80"].value
