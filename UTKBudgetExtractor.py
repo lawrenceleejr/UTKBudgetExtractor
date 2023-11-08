@@ -11,6 +11,12 @@ from collections import OrderedDict
 
 loc = sys.argv[1]
 
+prefix = ""
+if len(sys.argv) > 2:
+    prefix = sys.argv[2]
+
+print(">>> Using command prefix: "+prefix)
+
 # Load the spreadsheet file in xlsx format
 # `data_only=True` forces it to calculate all formulas
 
@@ -198,7 +204,7 @@ with open('budgetDefs.tex', 'w') as outputFile:
         
         print("{: >30} {: >20}".format(key,val))
 
-        outputFile.write("\\newcommand{\\%s}{%s}"%(key,val) + os.linesep)
+        outputFile.write("\\newcommand{\\%s}{%s}"%(prefix+key,val) + os.linesep)
 
 print(">>>")
 print(">>> Write output to budgetDefs.tex!")
