@@ -110,18 +110,40 @@ def render_section(prefix: str, title: str, is_sum: bool = False) -> str:
             "budget categories."
         )
 
+    def fy(base):
+        """First-year figure phrase: '$X in the first year'."""
+        return f"{_usd(prefix, base + 'YearOne')} in the first year"
+
     parts: List[str] = []
     parts.append(f"\\section{{{title}}}")
     parts.append(opener)
     parts.append(_summary_table(prefix))
+
+    # --- Basis of estimate / assumed raise structure -------------------
+    parts.append("\\subsection*{Basis of Estimate and Escalation}")
+    parts.append(
+        "Salaries and wages are budgeted at current institutional rates and "
+        "escalated annually following the assumed raise structure below. "
+        "Fringe-benefit and facilities-and-administrative (F\\&A) rates follow the "
+        "institution's current federally negotiated rate agreements."
+    )
+    parts.append(
+        "\\begin{itemize}\n"
+        f"\\item University of Tennessee (UT) personnel: {_m(prefix, 'SalaryInflationUT')}\\% per year.\n"
+        f"\\item Jointly-appointed faculty (JFO): {_m(prefix, 'SalaryInflationJFO')}\\% per year.\n"
+        f"\\item Graduate research assistants (GRAs): {_m(prefix, 'SalaryInflationGRA')}\\% per year.\n"
+        f"\\item Graduate tuition and mandatory fees: {_m(prefix, 'TuitionInflation')}\\% per year.\n"
+        "\\end{itemize}"
+    )
 
     # --- A. Senior Personnel -------------------------------------------
     parts.append("\\subsection*{A. Senior Personnel}")
     parts.append(
         "Funds are requested for the academic-year and/or summer effort of the "
         "senior personnel listed in the budget. Salaries are based on current "
-        "institutional rates and escalated at the approved annual rate. The "
-        f"total request for senior-personnel salaries is {_usd(prefix, 'SeniorSubtotalTotal')}."
+        "institutional rates and escalated at the assumed raise rate for each "
+        f"appointment type. Senior-personnel salaries are {fy('SeniorSubtotal')}, "
+        f"for a five-year total of {_usd(prefix, 'SeniorSubtotalTotal')}."
     )
 
     # --- B. Other Personnel --------------------------------------------
@@ -130,9 +152,11 @@ def render_section(prefix: str, title: str, is_sum: bool = False) -> str:
         "Funds are requested for postdoctoral researchers, graduate research "
         "assistants (GRAs), undergraduate researchers, and other personnel "
         "essential to the proposed research. Postdoctoral and student effort "
-        "drives the technical work of the project. The total request for other "
-        f"personnel is {_usd(prefix, 'OtherPersonnelSubtotalTotal')}, bringing total "
-        f"salaries and wages to {_usd(prefix, 'WagesTotal')}."
+        "drives the technical work of the project; their salaries escalate at the "
+        "assumed annual rates above. The other-personnel request is "
+        f"{fy('OtherPersonnelSubtotal')} ({_usd(prefix, 'OtherPersonnelSubtotalTotal')} "
+        f"over five years), bringing total salaries and wages to {fy('Wages')} and "
+        f"{_usd(prefix, 'WagesTotal')} over the project period."
     )
 
     # --- C. Fringe Benefits --------------------------------------------
@@ -140,9 +164,10 @@ def render_section(prefix: str, title: str, is_sum: bool = False) -> str:
     parts.append(
         "Fringe benefits are calculated using the institution's federally "
         "negotiated fringe-benefit rates applicable to each personnel category "
-        "(faculty, postdoctoral, student, and staff). The total fringe-benefit "
-        f"request is {_usd(prefix, 'FringeTotal')}, for total salaries and benefits "
-        f"of {_usd(prefix, 'SalaryAndBenefitsTotal')}."
+        "(faculty, postdoctoral, student, and staff). Fringe benefits are "
+        f"{fy('Fringe')} and {_usd(prefix, 'FringeTotal')} over five years, for "
+        f"total salaries and benefits of {fy('SalaryAndBenefits')} and "
+        f"{_usd(prefix, 'SalaryAndBenefitsTotal')} over the project period."
     )
 
     # --- D. Equipment ---------------------------------------------------
@@ -150,58 +175,60 @@ def render_section(prefix: str, title: str, is_sum: bool = False) -> str:
     parts.append(
         "Equipment is defined as items of tangible personal property with a "
         "useful life of more than one year and a unit acquisition cost of "
-        f"\\$5,000 or more. The total equipment request is {_usd(prefix, 'EquipmentTotal')}. "
-        "Each item, where requested, is itemized in the accompanying budget "
-        "spreadsheet."
+        f"\\$5,000 or more. Equipment is {fy('Equipment')}, for a total request of "
+        f"{_usd(prefix, 'EquipmentTotal')}. Each item, where requested, is itemized "
+        "in the accompanying budget spreadsheet."
     )
 
     # --- E. Travel (emphasized) ----------------------------------------
     parts.append("\\subsection*{E. Travel}")
     parts.append(
-        f"A total of {_usd(prefix, 'TravelTotal')} is requested for travel. Travel is "
-        "essential to disseminate results, participate in DOE program activities, "
-        "and sustain the scientific collaborations on which this research depends. "
-        "The request is broken down by period and by domestic vs.\\ foreign travel "
-        "below."
+        f"A total of {_usd(prefix, 'TravelTotal')} is requested for travel "
+        f"({fy('Travel')}). Travel is essential to disseminate results, participate "
+        "in DOE program activities, and sustain the scientific collaborations on "
+        "which this research depends. The request is broken down by period and by "
+        "domestic vs.\\ foreign travel below."
     )
     parts.append(_travel_table(prefix))
     parts.append(
         "\\textbf{Domestic travel} "
-        f"({_usd(prefix, 'DomesticTravelTotal')} total) supports attendance at "
-        "topical workshops and major conferences (e.g., APS April Meeting and "
-        "DPF), DOE-sponsored principal-investigator and program review meetings, "
-        "and collaboration meetings at partner national laboratories and "
-        "universities. Costs are estimated per traveler and include airfare, "
-        "lodging at prevailing per-diem rates, ground transportation, and "
-        "conference registration."
+        f"({_usd(prefix, 'DomesticTravelTotal')} total, {fy('DomesticTravel')}) "
+        "supports attendance at topical workshops and major conferences (e.g., APS "
+        "April Meeting and DPF), DOE-sponsored principal-investigator and program "
+        "review meetings, and collaboration meetings at partner national "
+        "laboratories and universities. Costs are estimated per traveler and "
+        "include airfare, lodging at prevailing per-diem rates, ground "
+        "transportation, and conference registration."
     )
     parts.append(
         "\\textbf{Foreign travel} "
-        f"({_usd(prefix, 'ForeignTravelTotal')} total) supports participation in "
-        "international collaboration meetings, experiment shifts, and conferences "
-        "central to the proposed program. All foreign travel will comply with the "
-        "Fly America Act and DOE foreign-travel approval requirements."
+        f"({_usd(prefix, 'ForeignTravelTotal')} total, {fy('ForeignTravel')}) "
+        "supports participation in international collaboration meetings, experiment "
+        "shifts, and conferences central to the proposed program. All foreign "
+        "travel will comply with the Fly America Act and DOE foreign-travel "
+        "approval requirements."
     )
 
     # --- F. Participant Support ----------------------------------------
     parts.append("\\subsection*{F. Participant Support Costs}")
     parts.append(
         f"A total of {_usd(prefix, 'ParticipantSupportTotal')} is requested for "
-        "participant support costs (stipends, travel, and subsistence for "
-        "participants in workshops, schools, or training activities associated "
-        "with the project). These funds are budgeted and accounted for separately "
-        "and are excluded from the indirect-cost base."
+        f"participant support costs ({fy('ParticipantSupport')}): stipends, travel, "
+        "and subsistence for participants in workshops, schools, or training "
+        "activities associated with the project. These funds are budgeted and "
+        "accounted for separately and are excluded from the indirect-cost base."
     )
 
     # --- G. Other Direct Costs -----------------------------------------
     parts.append("\\subsection*{G. Other Direct Costs}")
     parts.append(
-        f"Other direct costs total {_usd(prefix, 'OtherDirectTotal')} and include "
-        f"materials and supplies ({_usd(prefix, 'SuppliesTotal')}), publication and "
-        "page charges, and other direct project expenses. Graduate-student "
-        "tuition and mandatory fees "
-        f"({_usd(prefix, 'TuitionSubtotalTotal')}) are requested for the GRAs "
-        "supported on this project, consistent with institutional policy."
+        f"Other direct costs are {fy('OtherDirect')} and {_usd(prefix, 'OtherDirectTotal')} "
+        f"over five years, and include materials and supplies ({_usd(prefix, 'SuppliesTotal')}, "
+        f"{fy('Supplies')}), publication and page charges, and other direct project "
+        "expenses. Graduate-student tuition and mandatory fees "
+        f"({_usd(prefix, 'TuitionSubtotalTotal')} total, {fy('TuitionSubtotal')}) are "
+        "requested for the GRAs supported on this project and escalate at the "
+        "assumed tuition rate above, consistent with institutional policy."
     )
 
     # --- Indirect Costs -------------------------------------------------
@@ -210,16 +237,16 @@ def render_section(prefix: str, title: str, is_sum: bool = False) -> str:
         "Indirect costs are computed on the Modified Total Direct Cost (MTDC) base "
         "using the institution's federally negotiated rate "
         f"({_m(prefix, 'FandARateType')}; {_m(prefix, 'OverheadRateYearOne')}\\% in "
-        f"the first period). The total indirect-cost request is "
-        f"{_usd(prefix, 'IndirectTotal')}."
+        f"the first period). Indirect costs are {fy('Indirect')}, for a total "
+        f"indirect-cost request of {_usd(prefix, 'IndirectTotal')}."
     )
 
     # --- Total ----------------------------------------------------------
     parts.append("\\subsection*{Total Requested}")
     parts.append(
         f"The total funds requested from the Department of Energy for {title} are "
-        f"\\textbf{{{_usd(prefix, 'GrandTotal')}}} over the project period "
-        f"(direct costs {_usd(prefix, 'DirectTotal')} plus indirect costs "
+        f"{fy('Grand')} and \\textbf{{{_usd(prefix, 'GrandTotal')}}} over the project "
+        f"period (direct costs {_usd(prefix, 'DirectTotal')} plus indirect costs "
         f"{_usd(prefix, 'IndirectTotal')})."
     )
 

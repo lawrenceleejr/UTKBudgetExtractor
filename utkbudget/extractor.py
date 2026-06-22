@@ -97,13 +97,19 @@ INDIRECT_TOTAL_ROW = 110
 TOTAL_ROW = 111
 FANDA_RATE_TYPE_CELL = "D110"   # e.g. "Research ON-Campus"
 
-# Metadata (label / value pairs near the top of the sheet)
+# Metadata (label / value pairs near the top of the sheet).  ``rate`` cells are
+# stored as fractions in the workbook and converted to percentages on read.
 META_CELLS = OrderedDict([
     ("FundingAgency", ("D1", "text")),
     ("PINames", ("D2", "text")),
     ("ProjectTitle", ("D3", "text")),
     ("ProjectStartDate", ("D5", "date")),
     ("ProjectEndDate", ("I5", "date")),
+    # Assumed escalation / raise structure (used in the budget justification).
+    ("SalaryInflationUT", ("D6", "rate")),
+    ("SalaryInflationJFO", ("D7", "rate")),
+    ("SalaryInflationGRA", ("D8", "rate")),
+    ("TuitionInflation", ("D9", "rate")),
 ])
 
 # Column holding the fringe-benefit / overhead rate (a fraction such as 0.35)
@@ -196,7 +202,10 @@ def extract_budget(path: str) -> Budget:
 
     # -- Metadata ---------------------------------------------------------
     for name, (cell, kind) in META_CELLS.items():
-        b.add(name, ws[cell].value, kind)
+        value = ws[cell].value
+        if kind == KIND_RATE:
+            value = _rate(value)
+        b.add(name, value, kind)
 
     def abc(i: int) -> str:
         """0 -> 'A', 1 -> 'B', ...  (used to label repeated personnel slots)."""
