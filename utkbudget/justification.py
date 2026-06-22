@@ -18,6 +18,7 @@ import datetime as _dt
 from typing import List, Sequence, Tuple
 
 from .extractor import PERIOD_WORDS
+from .provenance import provenance_comment
 
 
 def _m(prefix: str, field: str) -> str:
@@ -236,7 +237,7 @@ def build_document(
     ``defs_inputs`` are relative paths to ``\\input`` (the generated defs
     files).  ``sections`` is a list of ``(prefix, heading, is_sum)``.
     """
-    out: List[str] = [PREAMBLE]
+    out: List[str] = [provenance_comment(), PREAMBLE]
     out.append(f"\\title{{{title}}}")
     out.append(f"\\date{{{_dt.date.today():%B %-d, %Y}}}")
     out.append("\\begin{document}")
