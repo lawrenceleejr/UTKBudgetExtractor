@@ -6,20 +6,27 @@ Two products are produced from a set of budgets:
   person-month) fields are the element-wise sum across the inputs.  This drives
   the merged LaTeX definitions and justification.
 * :func:`write_merged_workbook` -- a real ``.xlsx`` *in the same format as the
-  input spreadsheets*.  Individual line items (senior personnel, postdocs,
-  GRAs, equipment, ...) from every input are **concatenated** into the template
-  sections; fixed categories (travel, supplies, tuition, ...) are **summed**.
-  The template's subtotal/total/fringe/indirect formulas are left untouched so
-  Excel recomputes the correct combined budget on open.  If a section has more
-  line items than it has rows, the overflow is dropped and reported so the
-  caller can raise a prominent warning.
+  input spreadsheets*.
+
+The workbook merge is **formula-safe**: it never writes into a cell that holds a
+formula.  Only genuine *user-input* cells are copied -- on the main sheet the
+personnel inputs (name, base salary, appointment, person-months, tenure flags),
+fringe rates, equipment descriptions/costs, the manually-entered other-direct
+amounts, and the per-GRA tuition costs; and on the TRAVEL / SUPPLIES /
+SUBCONTRACTS / PARTICIPANT SUPPORT detail sheets the per-line entries.  Every
+subtotal, total, salary, fringe, tuition, F&A, and roll-up formula is left
+untouched so Excel recomputes the correct combined budget on open.
+
+Line items are *concatenated* into the template's fixed sections.  If a section
+has more line items than rows, the overflow is dropped and reported so the
+caller can raise a prominent warning.
 """
 
 from __future__ import annotations
 
 import warnings as _warnings
 from dataclasses import dataclass
-from typing import List, Optional, Sequence
+from typing import List, Optional, Sequence, Tuple
 
 from openpyxl import load_workbook
 
@@ -65,40 +72,8 @@ def merge_budgets(budgets: Sequence[Budget], source: str = "merged") -> Budget:
 
 
 # ---------------------------------------------------------------------------
-# Format-preserving workbook merge
+# Formula-safe workbook merge
 # ---------------------------------------------------------------------------
-
-# Personnel groups: (label, personnel rows, matching fringe rows, name_in_b).
-# Fringe rows auto-reference their personnel row (B44=B11, L44=ROUND(L11*F44,0)),
-# so only the per-person fringe *rate* (column F) needs to be written for fringe.
-#
-# ``name_in_b`` marks groups whose column B holds an actual person's name (the
-# senior-personnel section).  In the "Other Personnel" sections column B instead
-# holds a fixed role label ("Post Doc(s)", "GRA(s)", ...) that ships with the
-# template, so it must NOT be treated as a name nor used to detect a real entry.
-PERSONNEL_GROUPS = [
-    ("Senior Personnel", X.SENIOR_ROWS, X.SENIOR_FRINGE_ROWS, True),
-    ("Post Docs", X.POSTDOC_ROWS, X.POSTDOC_FRINGE_ROWS, False),
-    ("Other Professionals", X.OTHER_PROF_ROWS, X.OTHER_PROF_FRINGE_ROWS, False),
-    ("Graduate Research Assistants", X.GRA_ROWS, X.GRA_FRINGE_ROWS, False),
-    ("Undergraduate Researchers", [X.UNDERGRAD_ROW], [X.UNDERGRAD_FRINGE_ROW], False),
-    ("Admin/Clerical", [X.ADMIN_ROW], [X.ADMIN_FRINGE_ROW], False),
-    ("Other Personnel", X.OTHER_STAFF_ROWS, X.OTHER_STAFF_FRINGE_ROWS, False),
-]
-
-# Single-line categories that are summed cell-by-cell across inputs.
-LEAF_ROWS = (
-    [X.DOMESTIC_TRAVEL_ROW, X.FOREIGN_TRAVEL_ROW, X.PARTICIPANT_SUPPORT_ROW]
-    + list(X.OTHER_DIRECT_ROWS.values())
-    + [X.TUITION_ROW, X.DIFFERENTIAL_TUITION_ROW, X.MANDATORY_FEES_ROW, X.MTDC_ROW]
-)
-
-# Columns copied for each personnel entry (besides the period columns).  The
-# row total Q is left as its =SUM(L:P) formula and recomputes.  Column C
-# (UT/JFO/GRA) is written on used rows but left untouched on unused ones so the
-# template's dropdown defaults survive.
-PERSONNEL_DATA_COLS = ["C", "D", "E", "F"]
-
 
 @dataclass
 class RowOverflow:
@@ -120,108 +95,235 @@ def _present_name(value) -> bool:
     return value not in (None, "") and bool(str(value).strip())
 
 
-def _is_present(periods, base, total) -> bool:
-    """A line item is "real" only if it carries money (not just a label)."""
-    return any(_num(p) for p in periods) or _num(base) or _num(total)
+def _is_formula(cell) -> bool:
+    return cell.data_type == "f" or (
+        isinstance(cell.value, str) and cell.value.startswith("=")
+    )
 
 
-def _read_personnel(ws, pers_rows, fringe_rows, name_in_b) -> List[dict]:
-    entries = []
-    for prow, frow in zip(pers_rows, fringe_rows):
-        periods = [ws[f"{c}{prow}"].value for c in PERIOD_COLS]
-        base = ws[f"D{prow}"].value
-        total = ws[f"{X.TOTAL_COL}{prow}"].value
-        if not _is_present(periods, base, total):
-            continue
-        entry = {col: ws[f"{col}{prow}"].value for col in PERSONNEL_DATA_COLS}
-        entry["B"] = ws[f"B{prow}"].value if name_in_b else None
-        entry["periods"] = periods
-        entry["fringe_rate"] = ws[f"F{frow}"].value
-        entries.append(entry)
-    return entries
+def _set(ws, row: int, col: str, value) -> bool:
+    """Set ``ws[col][row]`` to ``value`` -- unless it holds a formula.
+
+    Returns ``True`` if the cell was written.  This is the single guarantee
+    that no formula is ever clobbered by the merge.
+    """
+    cell = ws[f"{col}{row}"]
+    if _is_formula(cell):
+        return False
+    cell.value = value
+    return True
 
 
-def _read_equipment(ws, rows) -> List[dict]:
-    entries = []
-    for r in rows:
-        periods = [ws[f"{c}{r}"].value for c in PERIOD_COLS]
-        name = ws[f"B{r}"].value
-        total = ws[f"{X.TOTAL_COL}{r}"].value
-        if _is_present(periods, None, total) or _present_name(name):
-            entries.append({"B": name, "periods": periods})
-    return entries
-
-
-def _drop_label(entry, fallback) -> str:
-    name = entry.get("B")
-    return str(name) if _present_name(name) else fallback
-
-
-def _write_personnel(ws, entries, pers_rows, fringe_rows, label,
-                     name_in_b) -> Optional[RowOverflow]:
-    capacity = len(pers_rows)
-    clear_cols = (["B"] if name_in_b else []) + ["D", "E", "F"]
-
-    # Clear each section row's money/input columns first (drops the per-person
-    # salary formulas and any leftover template numbers); role labels in B for
-    # the non-name groups, and column C dropdowns, are left intact.
-    for prow, frow in zip(pers_rows, fringe_rows):
-        for col in clear_cols:
-            ws[f"{col}{prow}"] = None
-        for c in PERIOD_COLS:
-            ws[f"{c}{prow}"] = None
-        ws[f"F{frow}"] = None  # fringe rate
-
-    for k, entry in enumerate(entries[:capacity]):
-        prow, frow = pers_rows[k], fringe_rows[k]
-        if name_in_b:
-            ws[f"B{prow}"] = entry["B"]
-        for col in PERSONNEL_DATA_COLS:
-            ws[f"{col}{prow}"] = entry[col]
-        for c, value in zip(PERIOD_COLS, entry["periods"]):
-            ws[f"{c}{prow}"] = value
-        ws[f"F{frow}"] = entry["fringe_rate"]
-
-    if len(entries) > capacity:
-        dropped = [_drop_label(e, f"{label} entry {capacity + i + 1}")
-                   for i, e in enumerate(entries[capacity:])]
-        return RowOverflow(label, capacity, len(entries), dropped)
+def _resolve_sheet(wb, name: str):
+    """Return the worksheet matching ``name`` (tolerant of trailing spaces)."""
+    if name in wb.sheetnames:
+        return wb[name]
+    for sn in wb.sheetnames:
+        if sn.strip() == name.strip():
+            return wb[sn]
     return None
 
 
-def _write_equipment(ws, entries, rows) -> Optional[RowOverflow]:
-    capacity = len(rows)
-    for r in rows:
-        ws[f"B{r}"] = None
-        for c in PERIOD_COLS:
-            ws[f"{c}{r}"] = None
+# -- Personnel ---------------------------------------------------------------
+
+# (label, personnel rows, matching fringe rows, name_in_b)
+PERSONNEL_GROUPS = [
+    ("Senior Personnel", X.SENIOR_ROWS, X.SENIOR_FRINGE_ROWS, True),
+    ("Post Docs", X.POSTDOC_ROWS, X.POSTDOC_FRINGE_ROWS, False),
+    ("Other Professionals", X.OTHER_PROF_ROWS, X.OTHER_PROF_FRINGE_ROWS, False),
+    ("Graduate Research Assistants", X.GRA_ROWS, X.GRA_FRINGE_ROWS, False),
+    ("Undergraduate Researchers", [X.UNDERGRAD_ROW], [X.UNDERGRAD_FRINGE_ROW], False),
+    ("Admin/Clerical", [X.ADMIN_ROW], [X.ADMIN_FRINGE_ROW], False),
+    ("Other Personnel", X.OTHER_STAFF_ROWS, X.OTHER_STAFF_FRINGE_ROWS, False),
+]
+
+# User-input columns feeding the salary formula (D=base, E=appt divisor,
+# F=person-months, S/T/U=tenure flags).  The period columns L-P are formulas
+# and recompute from these.
+PERSONNEL_INPUT_COLS = ["C", "D", "E", "F", "S", "T", "U"]
+
+
+def _merge_personnel(ws_t, value_sheets) -> List[RowOverflow]:
+    overflows = []
+    for label, pers_rows, fringe_rows, name_in_b in PERSONNEL_GROUPS:
+        pers_rows = list(pers_rows)
+        fringe_rows = list(fringe_rows)
+        cols = (["B"] if name_in_b else []) + PERSONNEL_INPUT_COLS
+
+        entries = []
+        for vs in value_sheets:
+            for prow, frow in zip(pers_rows, fringe_rows):
+                periods = [vs[f"{c}{prow}"].value for c in PERIOD_COLS]
+                base = vs[f"D{prow}"].value
+                if not (any(_num(p) for p in periods) or _num(base)):
+                    continue
+                entry = {c: vs[f"{c}{prow}"].value for c in cols}
+                entry["_fringe"] = vs[f"F{frow}"].value
+                entry["_name"] = vs[f"B{prow}"].value
+                entries.append(entry)
+
+        # Clear each slot's input columns + fringe rate (formula-safe).
+        for prow, frow in zip(pers_rows, fringe_rows):
+            for c in cols:
+                _set(ws_t, prow, c, None)
+            _set(ws_t, frow, "F", None)
+
+        capacity = len(pers_rows)
+        for k, entry in enumerate(entries[:capacity]):
+            prow, frow = pers_rows[k], fringe_rows[k]
+            for c in cols:
+                _set(ws_t, prow, c, entry[c])
+            _set(ws_t, frow, "F", entry["_fringe"])
+
+        if len(entries) > capacity:
+            dropped = []
+            for i, e in enumerate(entries[capacity:]):
+                nm = e.get("_name")
+                dropped.append(str(nm) if _present_name(nm) else f"{label} entry {capacity + i + 1}")
+            overflows.append(RowOverflow(label, capacity, len(entries), dropped))
+    return overflows
+
+
+# -- Generic stacking of line-item entry rows --------------------------------
+
+@dataclass
+class StackSpec:
+    """A set of repeating, concatenable entry slots on a sheet.
+
+    ``anchors`` are the base rows of each slot; ``cells`` are ``(row_delta, col)``
+    user-input cells to copy per entry; ``present`` is the subset used to decide
+    whether a slot is a real (funded) entry.
+    """
+    sheet: str
+    anchors: List[int]
+    cells: List[Tuple[int, str]]
+    present: List[Tuple[int, str]]
+    label: str
+    name_cell: Optional[Tuple[int, str]] = None
+
+
+def _stack(ws_t, value_sheets, spec: StackSpec) -> Optional[RowOverflow]:
+    entries = []
+    for vs in value_sheets:
+        for a in spec.anchors:
+            if any(_num(vs[f"{c}{a + d}"].value) for d, c in spec.present):
+                entry = {(d, c): vs[f"{c}{a + d}"].value for d, c in spec.cells}
+                if spec.name_cell:
+                    nd, nc = spec.name_cell
+                    entry["_name"] = vs[f"{nc}{a + nd}"].value
+                entries.append(entry)
+
+    capacity = len(spec.anchors)
+    for a in spec.anchors:                       # clear slots (formula-safe)
+        for d, c in spec.cells:
+            _set(ws_t, a + d, c, None)
     for k, entry in enumerate(entries[:capacity]):
-        r = rows[k]
-        ws[f"B{r}"] = entry["B"]
-        for c, value in zip(PERIOD_COLS, entry["periods"]):
-            ws[f"{c}{r}"] = value
+        a = spec.anchors[k]
+        for key, value in entry.items():
+            if key == "_name":
+                continue
+            d, c = key
+            _set(ws_t, a + d, c, value)
     if len(entries) > capacity:
-        dropped = [_drop_label(e, f"Equipment item {capacity + i + 1}")
-                   for i, e in enumerate(entries[capacity:])]
-        return RowOverflow("Equipment", capacity, len(entries), dropped)
+        dropped = []
+        for i, e in enumerate(entries[capacity:]):
+            nm = e.get("_name")
+            dropped.append(str(nm) if _present_name(nm) else f"{spec.label} entry {capacity + i + 1}")
+        return RowOverflow(spec.label, capacity, len(entries), dropped)
     return None
 
 
-def _sum_leaf_rows(ws, input_wss, rows) -> None:
+def _main_sheet_specs() -> List[StackSpec]:
+    """Concatenable sections that live on the main UTK Budget sheet."""
+    periods = PERIOD_COLS
+    equip_cells = [(0, "B")] + [(0, c) for c in periods]
+    return [
+        StackSpec(SHEET_NAME, list(X.EQUIPMENT_ROWS), equip_cells,
+                  [(0, c) for c in periods], "Equipment", name_cell=(0, "B")),
+    ]
+
+
+def _travel_specs(sheet: str) -> List[StackSpec]:
+    """TRAVEL: 5 period blocks, each with 10 domestic + 5 foreign entry rows."""
+    cols = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "L"]
+    cells = [(0, c) for c in cols]
+    money = [(0, c) for c in ["D", "E", "F", "G", "H", "I", "J"]]
+    specs = []
+    for p in range(5):
+        base = 1 + p * 22
+        dom = list(range(base + 3, base + 13))       # 10 domestic rows
+        foreign = list(range(base + 15, base + 20))   # 5 foreign rows
+        specs.append(StackSpec(sheet, dom, cells, money,
+                               f"TRAVEL Period {p + 1} Domestic", name_cell=(0, "A")))
+        specs.append(StackSpec(sheet, foreign, cells, money,
+                               f"TRAVEL Period {p + 1} Foreign", name_cell=(0, "A")))
+    return specs
+
+
+def _supplies_specs(sheet: str) -> List[StackSpec]:
+    cols = ["A", "B", "C", "D", "E", "F"]            # A=desc, B-F=periods
+    return [StackSpec(sheet, list(range(3, 38)), [(0, c) for c in cols],
+                      [(0, c) for c in ["B", "C", "D", "E", "F"]],
+                      "Supplies", name_cell=(0, "A"))]
+
+
+def _subcontracts_specs(sheet: str) -> List[StackSpec]:
+    cols = ["B", "C", "E", "F", "G", "H", "I"]       # B/C=names, E-I=periods
+    return [StackSpec(sheet, list(range(3, 18)), [(0, c) for c in cols],
+                      [(0, c) for c in ["E", "F", "G", "H", "I"]],
+                      "Subcontracts", name_cell=(0, "B"))]
+
+
+def _participant_specs(sheet, ws) -> List[StackSpec]:
+    """PARTICIPANT SUPPORT: a fixed number of participant-cost blocks (each a
+    "Number of Participants" row plus per-participant cost categories).
+
+    Blocks are located by their header label rather than assumed to repeat on a
+    fixed stride, so we never write past the real blocks (the sheet ends them
+    with a GRAND TOTALS row)."""
+    anchors = [r for r in range(1, ws.max_row + 1)
+               if isinstance(ws[f"A{r}"].value, str)
+               and ws[f"A{r}"].value.strip().startswith("PARTICIPANT SUPPORT")]
+    num = [(2, c) for c in ["F", "G", "H", "I", "J"]]   # participants per period
+    costs = [(d, "B") for d in range(6, 12)]            # cost per participant
+    return [StackSpec(sheet, anchors, num + costs, num, "Participant Support")]
+
+
+# -- Single-value leaves -----------------------------------------------------
+
+# Manually-entered other-direct rows (Publication, Shipping, ...).  Their period
+# cells are plain numbers and are summed across inputs; the Supplies/Subcontracts
+# rows are formulas (driven by their detail sheets) and are left alone.
+MANUAL_OTHER_DIRECT_ROWS = [89, 90, 91, 92, 93, 95, 96, 97]
+# Per-GRA tuition / fee costs (column F) -- carried from the first input.
+TUITION_COST_CELLS = [(X.TUITION_ROW, "F"),
+                      (X.DIFFERENTIAL_TUITION_ROW, "F"),
+                      (X.MANDATORY_FEES_ROW, "F")]
+
+
+def _sum_cells(ws_t, value_sheets, rows, cols) -> None:
     for r in rows:
-        for c in PERIOD_COLS:
-            ws[f"{c}{r}"] = sum(_num(w[f"{c}{r}"].value) for w in input_wss)
+        for c in cols:
+            total = sum(_num(vs[f"{c}{r}"].value) for vs in value_sheets)
+            _set(ws_t, r, c, total)
 
 
-def _set_merged_metadata(ws, input_wss, n_inputs) -> None:
-    names = []
-    for w in input_wss:
-        v = w["D2"].value
-        if _present_name(v):
-            names.append(str(v).strip())
+def _carry_cells(ws_t, value_sheets, cells) -> None:
+    for r, c in cells:
+        for vs in value_sheets:
+            v = vs[f"{c}{r}"].value
+            if _present_name(v) or _num(v):
+                _set(ws_t, r, c, v)
+                break
+
+
+def _set_metadata(ws_t, value_sheets, n_inputs) -> None:
+    names = [str(vs["D2"].value).strip() for vs in value_sheets
+             if _present_name(vs["D2"].value)]
     if names:
-        ws["D2"] = "; ".join(names)
-    ws["D3"] = f"MERGED budget ({n_inputs} proposal(s)) -- detail tabs reflect template only"
+        _set(ws_t, 2, "D", "; ".join(names))
+    _set(ws_t, 3, "D",
+         f"MERGED budget ({n_inputs} proposal(s)) -- combined by UTKBudgetExtractor")
 
 
 def write_merged_workbook(
@@ -231,8 +333,9 @@ def write_merged_workbook(
 ) -> List[RowOverflow]:
     """Merge ``input_paths`` into a single budget workbook at ``out_path``.
 
-    Returns a list of :class:`RowOverflow` for any section that ran out of
-    rows (empty when everything fit).
+    Only user-input cells are copied; formulas are never overwritten and
+    recompute when the workbook is opened in Excel.  Returns a list of
+    :class:`RowOverflow` for any section that ran out of rows.
     """
     input_paths = list(input_paths)
     if not input_paths:
@@ -246,31 +349,48 @@ def write_merged_workbook(
 
     if SHEET_NAME not in template_wb.sheetnames:
         raise ValueError(f"{template_path!r}: missing worksheet {SHEET_NAME!r}")
-    ws = template_wb[SHEET_NAME]
-    value_sheets = [wb[SHEET_NAME] for wb in value_wbs]
+    ws_t = template_wb[SHEET_NAME]
+    main_values = [wb[SHEET_NAME] for wb in value_wbs]
 
     overflows: List[RowOverflow] = []
 
-    for label, pers_rows, fringe_rows, name_in_b in PERSONNEL_GROUPS:
-        pers_rows = list(pers_rows)
-        fringe_rows = list(fringe_rows)
-        entries: List[dict] = []
-        for vws in value_sheets:
-            entries.extend(_read_personnel(vws, pers_rows, fringe_rows, name_in_b))
-        of = _write_personnel(ws, entries, pers_rows, fringe_rows, label, name_in_b)
+    # --- Main sheet: personnel, equipment, manual leaves, tuition, metadata
+    overflows.extend(_merge_personnel(ws_t, main_values))
+    for spec in _main_sheet_specs():
+        of = _stack(ws_t, main_values, spec)
         if of:
             overflows.append(of)
+    _sum_cells(ws_t, main_values, MANUAL_OTHER_DIRECT_ROWS, PERIOD_COLS)
+    _carry_cells(ws_t, main_values, TUITION_COST_CELLS)
+    _set_metadata(ws_t, main_values, len(input_paths))
 
-    eq_rows = list(X.EQUIPMENT_ROWS)
-    eq_entries: List[dict] = []
-    for vws in value_sheets:
-        eq_entries.extend(_read_equipment(vws, eq_rows))
-    of = _write_equipment(ws, eq_entries, eq_rows)
-    if of:
-        overflows.append(of)
+    # --- Detail sheets (so the main-sheet formula leaves recompute) --------
+    detail_builders = [
+        ("TRAVEL", _travel_specs),
+        ("SUPPLIES", _supplies_specs),
+        ("SUBCONTRACTS", _subcontracts_specs),
+    ]
+    for sheet_name, builder in detail_builders:
+        ws_detail = _resolve_sheet(template_wb, sheet_name)
+        if ws_detail is None:
+            continue
+        detail_values = [vs for vs in
+                         (_resolve_sheet(wb, sheet_name) for wb in value_wbs)
+                         if vs is not None]
+        for spec in builder(ws_detail.title):
+            of = _stack(ws_detail, detail_values, spec)
+            if of:
+                overflows.append(of)
 
-    _sum_leaf_rows(ws, value_sheets, LEAF_ROWS)
-    _set_merged_metadata(ws, value_sheets, len(input_paths))
+    ws_part = _resolve_sheet(template_wb, "PARTICIPANT SUPPORT COSTS")
+    if ws_part is not None:
+        part_values = [vs for vs in
+                       (_resolve_sheet(wb, "PARTICIPANT SUPPORT COSTS") for wb in value_wbs)
+                       if vs is not None]
+        for spec in _participant_specs(ws_part.title, ws_part):
+            of = _stack(ws_part, part_values, spec)
+            if of:
+                overflows.append(of)
 
     template_wb.save(out_path)
     return overflows

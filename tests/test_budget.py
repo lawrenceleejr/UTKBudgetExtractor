@@ -9,6 +9,7 @@ cells the extractor reads, so they do not depend on the large binary template.
 """
 
 import os
+import shutil
 import sys
 import tempfile
 import unittest
@@ -76,6 +77,38 @@ def make_workbook(path, total=10000.0, travel_dom=1000.0, travel_for=500.0,
     wb.save(path)
 
 
+TEMPLATE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        "examples", "Proposal_Budget_Basic.xlsx")
+
+
+def make_real_input(path, seniors=(), domestic_airfares=()):
+    """Copy the shipped template (real formulas intact) and set user inputs.
+
+    ``seniors`` is a list of ``(name, base_annual, person_months)``; each is
+    written into a senior-personnel row.  ``domestic_airfares`` are written into
+    the Period-1 domestic travel rows on the TRAVEL sheet.
+    """
+    shutil.copy(TEMPLATE, path)
+    wb = load_workbook(path)  # keep formulas
+    ws = wb[extractor.SHEET_NAME]
+    senior_rows = list(extractor.SENIOR_ROWS)
+    for i, (name, base, months) in enumerate(seniors):
+        r = senior_rows[i]
+        ws[f"B{r}"] = name
+        ws[f"C{r}"] = "UT"
+        ws[f"D{r}"] = base
+        ws[f"E{r}"] = 9
+        ws[f"F{r}"] = months
+    if domestic_airfares:
+        tr = wb["TRAVEL"]
+        for i, air in enumerate(domestic_airfares):
+            row = 4 + i  # Period-1 domestic entry rows start at 4
+            tr[f"E{row}"] = 1     # travelers
+            tr[f"G{row}"] = air   # airfare
+    wb.save(path)
+    return path
+
+
 class ExtractorTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
@@ -121,44 +154,66 @@ class MergeTests(unittest.TestCase):
         self.assertAlmostEqual(merged.get("OverheadRateYearOne"), 53.5)
         self.assertEqual(merged.get("FandARateType"), "Research ON-Campus")
 
-    def test_merged_workbook_same_format_and_sums_leaves(self):
-        # Same format as the inputs: keeps the UTK Budget sheet.
-        out = os.path.join(self.tmp, "merged.xlsx")
-        overflows = write_merged_workbook([self.a, self.b], out)
-        self.assertEqual(overflows, [])
+    def test_merged_workbook_is_formula_safe(self):
+        # Build two realistic inputs from the shipped template (which has the
+        # real formulas) and confirm the merge never clobbers a formula.
+        a = make_real_input(os.path.join(self.tmp, "ra.xlsx"),
+                            seniors=[("Alice", 100000, 3)])
+        b = make_real_input(os.path.join(self.tmp, "rb.xlsx"),
+                            seniors=[("Bob", 120000, 2)])
+        out = os.path.join(self.tmp, "rmerged.xlsx")
+        write_merged_workbook([a, b], out)
         wb = load_workbook(out, data_only=False)
-        self.assertIn(extractor.SHEET_NAME, wb.sheetnames)
         ws = wb[extractor.SHEET_NAME]
-        # Domestic-travel leaf row is summed across the two inputs (period 1
-        # column L): 1000 + 1000.
-        col = extractor.PERIOD_COLS[0]
-        self.assertAlmostEqual(ws[f"{col}{extractor.DOMESTIC_TRAVEL_ROW}"].value, 2000.0)
+        # Every one of these is a formula in the template and must stay a formula.
+        for coord in ["L11", "Q11", "L23", "L44", "L70", "L71",
+                      "L81", "L88", "L94", "L99", "L105", "L108", "L110", "L111"]:
+            v = ws[coord].value
+            self.assertTrue(isinstance(v, str) and v.startswith("="),
+                            f"{coord} should still be a formula, got {v!r}")
 
-    def test_personnel_concatenated(self):
-        a = os.path.join(self.tmp, "p1.xlsx")
-        b = os.path.join(self.tmp, "p2.xlsx")
-        make_workbook(a, seniors=["Alice", "Bob"])
-        make_workbook(b, seniors=["Carol"])
-        out = os.path.join(self.tmp, "m.xlsx")
-        overflows = write_merged_workbook([a, b], out)
-        self.assertEqual(overflows, [])
+    def test_personnel_user_inputs_concatenated(self):
+        a = make_real_input(os.path.join(self.tmp, "pa.xlsx"),
+                            seniors=[("Alice", 100000, 3), ("Bob", 120000, 2)])
+        b = make_real_input(os.path.join(self.tmp, "pb.xlsx"),
+                            seniors=[("Carol", 90000, 1)])
+        out = os.path.join(self.tmp, "pmerged.xlsx")
+        self.assertEqual(write_merged_workbook([a, b], out), [])
         ws = load_workbook(out)[extractor.SHEET_NAME]
         rows = list(extractor.SENIOR_ROWS)
-        names = [ws[f"B{rows[i]}"].value for i in range(3)]
-        self.assertEqual(names, ["Alice", "Bob", "Carol"])
+        self.assertEqual([ws[f"B{rows[i]}"].value for i in range(3)],
+                         ["Alice", "Bob", "Carol"])
+        # The base-salary *input* is copied; the salary cell stays a formula.
+        self.assertEqual([ws[f"D{rows[i]}"].value for i in range(3)],
+                         [100000, 120000, 90000])
+        self.assertTrue(str(ws[f"L{rows[0]}"].value).startswith("="))
+
+    def test_travel_entries_concatenated(self):
+        a = make_real_input(os.path.join(self.tmp, "ta.xlsx"), domestic_airfares=[500])
+        b = make_real_input(os.path.join(self.tmp, "tb.xlsx"), domestic_airfares=[700])
+        out = os.path.join(self.tmp, "tmerged.xlsx")
+        write_merged_workbook([a, b], out)
+        wb = load_workbook(out)
+        tr = wb["TRAVEL"]
+        # Period-1 domestic entries start at row 4; both files' airfares stack.
+        self.assertEqual(tr["G4"].value, 500)
+        self.assertEqual(tr["G5"].value, 700)
+        # The per-row total stays a formula.
+        self.assertTrue(str(tr["K4"].value).startswith("="))
 
     def test_row_overflow_warns(self):
         cap = len(list(extractor.SENIOR_ROWS))
-        a = os.path.join(self.tmp, "big.xlsx")
-        b = os.path.join(self.tmp, "one.xlsx")
-        make_workbook(a, seniors=[f"PI{i}" for i in range(cap)])  # fills section
-        make_workbook(b, seniors=["Overflow"])                    # one too many
-        out = os.path.join(self.tmp, "m.xlsx")
+        a = make_real_input(os.path.join(self.tmp, "big.xlsx"),
+                            seniors=[(f"PI{i}", 80000, 1) for i in range(cap)])
+        b = make_real_input(os.path.join(self.tmp, "one.xlsx"),
+                            seniors=[("Overflow", 80000, 1)])
+        out = os.path.join(self.tmp, "omerged.xlsx")
         overflows = write_merged_workbook([a, b], out)
-        self.assertEqual(len(overflows), 1)
-        self.assertEqual(overflows[0].capacity, cap)
-        self.assertEqual(overflows[0].needed, cap + 1)
-        self.assertEqual(overflows[0].dropped, ["Overflow"])
+        senior = [o for o in overflows if o.section == "Senior Personnel"]
+        self.assertEqual(len(senior), 1)
+        self.assertEqual(senior[0].capacity, cap)
+        self.assertEqual(senior[0].needed, cap + 1)
+        self.assertEqual(senior[0].dropped, ["Overflow"])
 
 
 class TexTests(unittest.TestCase):

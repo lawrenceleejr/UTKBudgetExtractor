@@ -106,30 +106,34 @@ filename (per-file defs), the program name (per-program merge), or `Combined`
 ## How the merge works
 
 The merged workbook is a real copy of the budget spreadsheet (the first input is
-used as the structural template, so every sheet, style, and roll-up formula is
-preserved), with the inputs combined into it:
+used as the structural template, so every sheet, style, and formula is
+preserved). The merge is **formula-safe: it never overwrites a cell that holds a
+formula — only genuine user-input cells are copied** — and every subtotal,
+total, salary, fringe, tuition, F&A, and roll-up formula recomputes from those
+inputs when the workbook is opened in Excel.
 
 - **Line items are concatenated.** Each input's senior personnel, postdocs,
   other professionals, GRAs, undergraduates, admin/clerical, other personnel,
   and equipment items are stacked, in file order, into the template's sections.
-  Each person keeps their own salary and fringe rate.
-- **Categories are summed.** Travel (domestic/foreign), participant support, the
-  other-direct-cost lines, tuition/fees, and the F&A base are summed cell by
-  cell across all inputs.
-- **Totals recompute themselves.** The subtotal, total, fringe, and indirect
-  (F&A) formulas are left untouched, so opening the file in Excel recomputes the
-  correct combined budget. (Until opened in Excel, those formula cells have no
-  cached value.)
-- **If a section runs out of rows** — e.g. more than 12 senior personnel, or
-  more than 4 GRAs across the merged proposals — the overflow entries are
-  dropped and the tool prints a large, impossible-to-miss warning naming the
-  section and the dropped entries. Add rows to that section in the template (and
-  its matching fringe rows) and re-run, or split the proposal.
+  For each person the *inputs* are copied (name, base salary, appointment,
+  person-months, tenure flags, and the fringe rate); the salary and fringe
+  amounts are formulas and recompute.
+- **Detail sheets are merged too.** Travel trips (per period, domestic/foreign),
+  supply lines, subcontract lines, and participant-support blocks are
+  concatenated on the `TRAVEL`, `SUPPLIES`, `SUBCONTRACTS`, and `PARTICIPANT
+  SUPPORT COSTS` sheets, so the main-sheet totals that reference them recompute.
+- **Manually-entered other-direct costs** (publication, shipping, etc.) are
+  summed; the per-GRA tuition/fee costs are carried from the first input (so
+  tuition recomputes for the merged GRA count).
+- **If a section runs out of rows** — e.g. more than 12 senior personnel, more
+  than 4 GRAs, or more than 10 domestic trips in a period across the merged
+  proposals — the overflow entries are dropped and the tool prints a large,
+  impossible-to-miss warning naming the section and the dropped entries. Add
+  rows to that section in the template and re-run, or split the proposal.
 
-The detail tabs (`TRAVEL`, `SUPPLIES`, `SUBCONTRACTS`, `PARTICIPANT SUPPORT
-COSTS`) are carried over from the template file only; the authoritative merged
-numbers live on the main `UTK Budget` sheet. The merged file's title cell notes
-this.
+Because the merged file stores formulas without cached values, open it once in
+Excel (or another engine that evaluates formulas) to populate the computed
+totals.
 
 ## Adapting to a new spreadsheet revision
 
