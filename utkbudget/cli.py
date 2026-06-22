@@ -9,10 +9,10 @@ every ``.xlsx`` input, write:
 * ``justification.tex`` -- a DOE-style budget justification with a section per
   input file and a section for the combined sum.
 
-If the folder instead contains *sub-folders* (e.g. ``Intensity Frontier``,
-``Energy Frontier``, ``Theory Frontier``), each sub-folder is treated as a
-program and gets its own merged workbook, definitions, and justification, and a
-fully merged version across every program is produced at the top level.
+If the folder instead contains *sub-folders* (e.g. ``Program 1``,
+``Program 2``, ``Program 3``), each sub-folder is treated as a program and gets
+its own merged workbook, definitions, and justification, and a fully merged
+version across every program is produced at the top level.
 """
 
 from __future__ import annotations

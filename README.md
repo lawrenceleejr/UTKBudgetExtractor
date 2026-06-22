@@ -60,12 +60,12 @@ them:
 
 ```
 budgets/
-├── Energy Frontier/
+├── Program 1/
 │   ├── PI_Smith.xlsx
 │   └── PI_Jones.xlsx
-├── Intensity Frontier/
+├── Program 2/
 │   └── PI_Lee.xlsx
-└── Theory Frontier/
+└── Program 3/
     └── PI_Richers.xlsx
 ```
 
@@ -73,14 +73,14 @@ produces
 
 ```
 output/
-├── EnergyFrontier/
+├── ProgramOne/
 │   ├── PI_Smith.tex
 │   ├── PI_Jones.tex
-│   ├── EnergyFrontier_merged.xlsx
-│   ├── EnergyFrontier_merged.tex
-│   └── EnergyFrontier_justification.tex   # per file + program sum
-├── IntensityFrontier/ ...
-├── TheoryFrontier/ ...
+│   ├── ProgramOne_merged.xlsx
+│   ├── ProgramOne_merged.tex
+│   └── ProgramOne_justification.tex   # per file + program sum
+├── ProgramTwo/ ...
+├── ProgramThree/ ...
 ├── merged.xlsx          # fully merged across every program
 ├── merged.tex           # defs for the grand total
 └── justification.tex    # per-program + fully merged grand total
