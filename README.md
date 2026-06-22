@@ -11,8 +11,8 @@ and it produces, for **every** input file:
 1. **A LaTeX definitions file** named after the input (`PI_Smith.xlsx` →
    `PI_Smith.tex`) containing every labelled number as a `\newcommand`, ready to
    `\input` into a proposal or justification.
-2. **A merged Excel workbook** (`merged.xlsx`) combining all of the inputs — a
-   "Merged" summary sheet plus one sheet per input file.
+2. **A merged Excel workbook** (`merged.xlsx`) **in the same format as the
+   inputs**, combining all of the budgets (see [Merging](#how-the-merge-works)).
 3. **Merged LaTeX definitions** (`merged.tex`) for the combined budget.
 4. **A DOE budget-justification document** (`justification.tex`) with a written
    justification for each input file followed by a justification of the combined
@@ -102,6 +102,34 @@ filename (per-file defs), the program name (per-program merge), or `Combined`
 `DomesticTravelTotal`, `ForeignTravelTotal`, `Travel`/`DomesticTravel` per-year
 (`...YearOne` … `...YearFive`), `EquipmentTotal`, `ParticipantSupportTotal`,
 `TuitionSubtotalTotal`, `OverheadRateYearOne`, and `FandARateType`.
+
+## How the merge works
+
+The merged workbook is a real copy of the budget spreadsheet (the first input is
+used as the structural template, so every sheet, style, and roll-up formula is
+preserved), with the inputs combined into it:
+
+- **Line items are concatenated.** Each input's senior personnel, postdocs,
+  other professionals, GRAs, undergraduates, admin/clerical, other personnel,
+  and equipment items are stacked, in file order, into the template's sections.
+  Each person keeps their own salary and fringe rate.
+- **Categories are summed.** Travel (domestic/foreign), participant support, the
+  other-direct-cost lines, tuition/fees, and the F&A base are summed cell by
+  cell across all inputs.
+- **Totals recompute themselves.** The subtotal, total, fringe, and indirect
+  (F&A) formulas are left untouched, so opening the file in Excel recomputes the
+  correct combined budget. (Until opened in Excel, those formula cells have no
+  cached value.)
+- **If a section runs out of rows** — e.g. more than 12 senior personnel, or
+  more than 4 GRAs across the merged proposals — the overflow entries are
+  dropped and the tool prints a large, impossible-to-miss warning naming the
+  section and the dropped entries. Add rows to that section in the template (and
+  its matching fringe rows) and re-run, or split the proposal.
+
+The detail tabs (`TRAVEL`, `SUPPLIES`, `SUBCONTRACTS`, `PARTICIPANT SUPPORT
+COSTS`) are carried over from the template file only; the authoritative merged
+numbers live on the main `UTK Budget` sheet. The merged file's title cell notes
+this.
 
 ## Adapting to a new spreadsheet revision
 

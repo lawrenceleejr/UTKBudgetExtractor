@@ -24,8 +24,13 @@ from utkbudget.texdefs import format_value, tex_prefix, write_defs
 from utkbudget.justification import build_document
 
 
-def make_workbook(path, total=10000.0, travel_dom=1000.0, travel_for=500.0):
-    """Write a minimal but structurally valid UTK Budget workbook."""
+def make_workbook(path, total=10000.0, travel_dom=1000.0, travel_for=500.0,
+                  seniors=None):
+    """Write a minimal but structurally valid UTK Budget workbook.
+
+    ``seniors`` is an optional list of names written into the senior-personnel
+    rows (used to exercise the concatenating merge and its row-overflow path).
+    """
     wb = Workbook()
     ws = wb.active
     ws.title = extractor.SHEET_NAME
@@ -33,6 +38,13 @@ def make_workbook(path, total=10000.0, travel_dom=1000.0, travel_for=500.0):
     # metadata
     ws["D2"] = "Dr. Test PI"
     ws["D3"] = "A & B Physics"      # contains an ampersand -> tests escaping
+
+    for i, name in enumerate(seniors or []):
+        row = list(extractor.SENIOR_ROWS)[i]
+        ws[f"B{row}"] = name
+        ws[f"D{row}"] = 100000
+        for col in extractor.PERIOD_COLS:
+            ws[f"{col}{row}"] = 50000
 
     def line(row, base):
         tot = 0.0
@@ -109,13 +121,44 @@ class MergeTests(unittest.TestCase):
         self.assertAlmostEqual(merged.get("OverheadRateYearOne"), 53.5)
         self.assertEqual(merged.get("FandARateType"), "Research ON-Campus")
 
-    def test_write_merged_workbook(self):
-        ba, bb = extract_budget(self.a), extract_budget(self.b)
-        merged = merge_budgets([ba, bb])
+    def test_merged_workbook_same_format_and_sums_leaves(self):
+        # Same format as the inputs: keeps the UTK Budget sheet.
         out = os.path.join(self.tmp, "merged.xlsx")
-        write_merged_workbook(merged, [("a", ba), ("b", bb)], out)
-        wb = load_workbook(out)
-        self.assertEqual(wb.sheetnames, ["Merged", "a", "b"])
+        overflows = write_merged_workbook([self.a, self.b], out)
+        self.assertEqual(overflows, [])
+        wb = load_workbook(out, data_only=False)
+        self.assertIn(extractor.SHEET_NAME, wb.sheetnames)
+        ws = wb[extractor.SHEET_NAME]
+        # Domestic-travel leaf row is summed across the two inputs (period 1
+        # column L): 1000 + 1000.
+        col = extractor.PERIOD_COLS[0]
+        self.assertAlmostEqual(ws[f"{col}{extractor.DOMESTIC_TRAVEL_ROW}"].value, 2000.0)
+
+    def test_personnel_concatenated(self):
+        a = os.path.join(self.tmp, "p1.xlsx")
+        b = os.path.join(self.tmp, "p2.xlsx")
+        make_workbook(a, seniors=["Alice", "Bob"])
+        make_workbook(b, seniors=["Carol"])
+        out = os.path.join(self.tmp, "m.xlsx")
+        overflows = write_merged_workbook([a, b], out)
+        self.assertEqual(overflows, [])
+        ws = load_workbook(out)[extractor.SHEET_NAME]
+        rows = list(extractor.SENIOR_ROWS)
+        names = [ws[f"B{rows[i]}"].value for i in range(3)]
+        self.assertEqual(names, ["Alice", "Bob", "Carol"])
+
+    def test_row_overflow_warns(self):
+        cap = len(list(extractor.SENIOR_ROWS))
+        a = os.path.join(self.tmp, "big.xlsx")
+        b = os.path.join(self.tmp, "one.xlsx")
+        make_workbook(a, seniors=[f"PI{i}" for i in range(cap)])  # fills section
+        make_workbook(b, seniors=["Overflow"])                    # one too many
+        out = os.path.join(self.tmp, "m.xlsx")
+        overflows = write_merged_workbook([a, b], out)
+        self.assertEqual(len(overflows), 1)
+        self.assertEqual(overflows[0].capacity, cap)
+        self.assertEqual(overflows[0].needed, cap + 1)
+        self.assertEqual(overflows[0].dropped, ["Overflow"])
 
 
 class TexTests(unittest.TestCase):

@@ -24,10 +24,45 @@ from typing import List, Tuple
 
 from .extractor import Budget, extract_budget
 from .justification import write_document
-from .merge import merge_budgets, write_merged_workbook
+from .merge import RowOverflow, merge_budgets, write_merged_workbook
 from .texdefs import tex_prefix, write_defs
 
 GRAND_PREFIX = "Combined"
+
+
+def warn_row_overflow(context: str, xlsx_path: str,
+                      overflows: List[RowOverflow]) -> None:
+    """Print an impossible-to-miss warning when a section ran out of rows."""
+    bar = "!" * 78
+    lines = [
+        "",
+        bar,
+        bar,
+        "!!!" + "  RAN OUT OF ROWS WHILE MERGING  ".center(72) + "!!!",
+        bar,
+        f"!!!  Context : {context}".ljust(75) + "!!!",
+        f"!!!  Workbook: {os.path.relpath(xlsx_path)}".ljust(75) + "!!!",
+        "!!!" + " " * 72 + "!!!",
+    ]
+    for of in overflows:
+        lines.append(
+            f"!!!  Section '{of.section}' has {of.capacity} row(s) but the merge "
+            f"needs {of.needed}.".ljust(75) + "!!!"
+        )
+        lines.append(
+            f"!!!    -> {of.needed - of.capacity} entr(y/ies) DROPPED: "
+            f"{', '.join(of.dropped)}".ljust(75)[:75] + "!!!"
+        )
+    lines += [
+        "!!!" + " " * 72 + "!!!",
+        "!!!" + "  The merged spreadsheet is INCOMPLETE. Add rows to the ".center(72) + "!!!",
+        "!!!" + "  template's sections, or split the proposal, then re-run.  ".center(72) + "!!!",
+        bar,
+        bar,
+        "",
+    ]
+    sys.stderr.write("\n".join(lines) + "\n")
+    sys.stderr.flush()
 
 
 def find_xlsx(folder: str) -> List[str]:
@@ -91,7 +126,6 @@ def process_group(name: str, files: List[str], out_dir: str,
 
     used_prefixes = {group_prefix}
     budgets: List[Budget] = []
-    per_input: List[Tuple[str, Budget]] = []
     defs_inputs: List[str] = []          # relative \input paths for justification
     sections: List[Tuple[str, str, bool]] = []
 
@@ -106,13 +140,16 @@ def process_group(name: str, files: List[str], out_dir: str,
         write_defs(budget, prefix, os.path.join(out_dir, tex_name))
         defs_inputs.append(tex_name)
         sections.append((prefix, base, False))
-        per_input.append((base, budget))
 
-    # Merge the group
+    # Merged budget definitions (summed field-by-field, drives the .tex).
     merged = merge_budgets(budgets, source=f"{name} (merged)")
+
+    # Merged workbook, in the same format as the inputs.
     merged_xlsx = os.path.join(out_dir, merged_xlsx_name)
-    write_merged_workbook(merged, per_input, merged_xlsx)
+    overflows = write_merged_workbook(files, merged_xlsx)
     print(f"  wrote {os.path.relpath(merged_xlsx)}")
+    if overflows:
+        warn_row_overflow(name, merged_xlsx, overflows)
 
     write_defs(merged, group_prefix, os.path.join(out_dir, merged_tex_name),
                header_note=f"Merged total for {name}")
@@ -166,6 +203,7 @@ def run(input_dir: str, output_dir: str) -> None:
     master_defs_inputs: List[str] = []
     master_sections: List[Tuple[str, str, bool]] = []
     all_budgets: List[Budget] = []
+    all_files: List[str] = []
 
     # Any loose files at the root are treated as their own group.
     pending = list(subgroups)
@@ -180,17 +218,20 @@ def run(input_dir: str, output_dir: str) -> None:
             name, files, group_out, gprefix, file_stub=tex_prefix(name))
         group_merged.append((name, merged))
         all_budgets.extend(budgets)
+        all_files.extend(files)
         # Relative path from output_dir for the master document's \input
         rel = os.path.relpath(merged_tex_path, output_dir)
         master_defs_inputs.append(rel)
         master_sections.append((gprefix, name, False))
 
     # ---- Fully merged version across every program ---------------------
-    print(f"\n=== Fully merged ({len(all_budgets)} file(s)) -> {output_dir} ===")
+    print(f"\n=== Fully merged ({len(all_files)} file(s)) -> {output_dir} ===")
     grand = merge_budgets(all_budgets, source="All programs (merged)")
     grand_xlsx = os.path.join(output_dir, "merged.xlsx")
-    write_merged_workbook(grand, group_merged, grand_xlsx)
+    overflows = write_merged_workbook(all_files, grand_xlsx)
     print(f"  wrote {os.path.relpath(grand_xlsx)}")
+    if overflows:
+        warn_row_overflow("All Programs", grand_xlsx, overflows)
 
     write_defs(grand, GRAND_PREFIX, os.path.join(output_dir, "merged.tex"),
                header_note="Fully merged total across all programs")
