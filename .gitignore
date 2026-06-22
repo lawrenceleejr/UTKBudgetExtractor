@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Generated outputs
+output/
+*.aux
+*.log
+*.out
+*.pdf
+*.fls
+*.fdb_latexmk
+~$*.xlsx
