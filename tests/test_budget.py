@@ -188,6 +188,27 @@ class MergeTests(unittest.TestCase):
                          [100000, 120000, 90000])
         self.assertTrue(str(ws[f"L{rows[0]}"].value).startswith("="))
 
+    def test_fringe_rates_untouched(self):
+        # Fringe rates (column F on the fringe rows) ship with the template and
+        # must not be modified by the merge.
+        a = make_real_input(os.path.join(self.tmp, "fa.xlsx"),
+                            seniors=[("Alice", 100000, 3)])
+        b = make_real_input(os.path.join(self.tmp, "fb.xlsx"),
+                            seniors=[("Bob", 120000, 2)])
+        # Put a sentinel fringe rate in the template (the first input).
+        wb = load_workbook(a)
+        wb[extractor.SHEET_NAME]["F44"] = 0.42
+        wb.save(a)
+        out = os.path.join(self.tmp, "fmerged.xlsx")
+        write_merged_workbook([a, b], out)
+        merged = load_workbook(out)[extractor.SHEET_NAME]
+        template = load_workbook(a)[extractor.SHEET_NAME]
+        # The sentinel survives, and every senior fringe rate equals the
+        # template's (i.e. the merge left them all untouched).
+        self.assertEqual(merged["F44"].value, 0.42)
+        for r in range(44, 56):
+            self.assertEqual(merged[f"F{r}"].value, template[f"F{r}"].value)
+
     def test_travel_entries_concatenated(self):
         a = make_real_input(os.path.join(self.tmp, "ta.xlsx"), domestic_airfares=[500])
         b = make_real_input(os.path.join(self.tmp, "tb.xlsx"), domestic_airfares=[700])

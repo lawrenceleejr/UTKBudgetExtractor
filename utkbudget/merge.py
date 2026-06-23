@@ -147,33 +147,32 @@ def _merge_personnel(ws_t, value_sheets) -> List[RowOverflow]:
     overflows = []
     for label, pers_rows, fringe_rows, name_in_b in PERSONNEL_GROUPS:
         pers_rows = list(pers_rows)
-        fringe_rows = list(fringe_rows)
         cols = (["B"] if name_in_b else []) + PERSONNEL_INPUT_COLS
 
         entries = []
         for vs in value_sheets:
-            for prow, frow in zip(pers_rows, fringe_rows):
+            for prow in pers_rows:
                 periods = [vs[f"{c}{prow}"].value for c in PERIOD_COLS]
                 base = vs[f"D{prow}"].value
                 if not (any(_num(p) for p in periods) or _num(base)):
                     continue
                 entry = {c: vs[f"{c}{prow}"].value for c in cols}
-                entry["_fringe"] = vs[f"F{frow}"].value
                 entry["_name"] = vs[f"B{prow}"].value
                 entries.append(entry)
 
-        # Clear each slot's input columns + fringe rate (formula-safe).
-        for prow, frow in zip(pers_rows, fringe_rows):
+        # Clear each slot's input columns (formula-safe).  The fringe-rate cells
+        # (column F on the fringe rows) are deliberately left untouched -- they
+        # are the institution's standard rates that ship with the template, so
+        # the merged fringe amounts use them as-is.
+        for prow in pers_rows:
             for c in cols:
                 _set(ws_t, prow, c, None)
-            _set(ws_t, frow, "F", None)
 
         capacity = len(pers_rows)
         for k, entry in enumerate(entries[:capacity]):
-            prow, frow = pers_rows[k], fringe_rows[k]
+            prow = pers_rows[k]
             for c in cols:
                 _set(ws_t, prow, c, entry[c])
-            _set(ws_t, frow, "F", entry["_fringe"])
 
         if len(entries) > capacity:
             dropped = []
