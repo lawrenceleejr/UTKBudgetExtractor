@@ -33,9 +33,6 @@ def _usd(prefix: str, field: str) -> str:
 PREAMBLE = r"""\documentclass[11pt]{article}
 \usepackage[margin=1in]{geometry}
 \usepackage{booktabs}
-\usepackage{array}
-\usepackage{longtable}
-\usepackage{enumitem}
 \usepackage{hyperref}
 \setlength{\parskip}{0.5em}
 \setlength{\parindent}{0pt}
@@ -264,9 +261,10 @@ def build_document(
     ``defs_inputs`` are relative paths to ``\\input`` (the generated defs
     files).  ``sections`` is a list of ``(prefix, heading, is_sum)``.
     """
+    today = _dt.date.today()
     out: List[str] = [provenance_comment(), PREAMBLE]
     out.append(f"\\title{{{title}}}")
-    out.append(f"\\date{{{_dt.date.today():%B %-d, %Y}}}")
+    out.append(f"\\date{{{today:%B} {today.day}, {today:%Y}}}")
     out.append("\\begin{document}")
     out.append("\\maketitle")
 

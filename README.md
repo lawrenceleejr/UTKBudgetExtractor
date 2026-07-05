@@ -115,21 +115,28 @@ inputs when the workbook is opened in Excel.
 - **Line items are concatenated.** Each input's senior personnel, postdocs,
   other professionals, GRAs, undergraduates, admin/clerical, other personnel,
   and equipment items are stacked, in file order, into the template's sections.
-  For each person the *inputs* are copied (name, base salary, appointment,
-  person-months, tenure flags, and the fringe rate); the salary and fringe
-  amounts are formulas and recompute.
+  For each person the *inputs* are copied (name, raise flag, UT/JFO, base
+  salary, appointment, person-months for all five periods, and tenure flags);
+  the salary and fringe amounts are formulas and recompute. The fringe-rate
+  cells are institutional constants that ship with the template and are never
+  touched.
 - **Detail sheets are merged too.** Travel trips (per period, domestic/foreign),
   supply lines, subcontract lines, and participant-support blocks are
   concatenated on the `TRAVEL`, `SUPPLIES`, `SUBCONTRACTS`, and `PARTICIPANT
   SUPPORT COSTS` sheets, so the main-sheet totals that reference them recompute.
 - **Manually-entered other-direct costs** (publication, shipping, etc.) are
-  summed; the per-GRA tuition/fee costs are carried from the first input (so
-  tuition recomputes for the merged GRA count).
+  summed; the per-GRA tuition/fee costs are carried (tuition recomputes for the
+  merged GRA count).
 - **If a section runs out of rows** — e.g. more than 12 senior personnel, more
   than 4 GRAs, or more than 10 domestic trips in a period across the merged
   proposals — the overflow entries are dropped and the tool prints a large,
   impossible-to-miss warning naming the section and the dropped entries. Add
   rows to that section in the template and re-run, or split the proposal.
+- **Workbook-wide inputs are checked for conflicts.** Some inputs cannot be
+  summed — the salary/tuition inflation rates, the F&A base and rate type, and
+  the per-GRA tuition/fee costs apply to the whole workbook. The merge carries
+  the first input's values and prints the same large warning if the inputs
+  disagree, since the merged totals then cannot equal the sum of the inputs.
 
 Because the merged file stores formulas without cached values, open it once in
 Excel (or another engine that evaluates formulas) to populate the computed

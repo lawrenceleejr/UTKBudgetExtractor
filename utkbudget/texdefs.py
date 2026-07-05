@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import datetime as _dt
 import os
-from typing import Iterable
 
 from .extractor import (
     Budget,
@@ -83,7 +82,8 @@ def format_value(field) -> str:
 
     if kind == KIND_DATE:
         if isinstance(value, (_dt.datetime, _dt.date)):
-            return value.strftime("%B %-d, %Y")
+            # value.day avoids strftime's platform-specific %-d / %#d.
+            return f"{value:%B} {value.day}, {value:%Y}"
         return escape_tex(str(value))
 
     return escape_tex(str(value))
@@ -106,16 +106,3 @@ def write_defs(budget: Budget, prefix: str, out_path: str,
         for field in budget:
             fh.write("\\newcommand{\\%s%s}{%s}\n" % (prefix, field.name, format_value(field)))
     return out_path
-
-
-def write_defs_for_files(budgets: Iterable, out_dir: str):
-    """Write one defs file per (prefix, budget, filename) tuple.
-
-    ``budgets`` is an iterable of ``(prefix, budget, tex_filename)``.
-    """
-    written = []
-    for prefix, budget, tex_name in budgets:
-        out_path = os.path.join(out_dir, tex_name)
-        write_defs(budget, prefix, out_path)
-        written.append(out_path)
-    return written

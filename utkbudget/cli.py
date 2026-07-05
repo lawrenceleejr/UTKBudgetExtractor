@@ -24,43 +24,50 @@ from typing import List, Tuple
 
 from .extractor import Budget, extract_budget
 from .justification import write_document
-from .merge import RowOverflow, merge_budgets, write_merged_workbook
+from .merge import (MergeIssue, RowOverflow, ValueConflict, merge_budgets,
+                    write_merged_workbook)
 from .texdefs import tex_prefix, write_defs
 
 GRAND_PREFIX = "Combined"
 
 
-def warn_row_overflow(context: str, xlsx_path: str,
-                      overflows: List[RowOverflow]) -> None:
-    """Print an impossible-to-miss warning when a section ran out of rows."""
-    bar = "!" * 78
-    lines = [
-        "",
-        bar,
-        bar,
-        "!!!" + "  RAN OUT OF ROWS WHILE MERGING  ".center(72) + "!!!",
-        bar,
-        f"!!!  Context : {context}".ljust(75) + "!!!",
-        f"!!!  Workbook: {os.path.relpath(xlsx_path)}".ljust(75) + "!!!",
-        "!!!" + " " * 72 + "!!!",
-    ]
-    for of in overflows:
-        lines.append(
-            f"!!!  Section '{of.section}' has {of.capacity} row(s) but the merge "
-            f"needs {of.needed}.".ljust(75) + "!!!"
-        )
-        lines.append(
-            f"!!!    -> {of.needed - of.capacity} entr(y/ies) DROPPED: "
-            f"{', '.join(of.dropped)}".ljust(75)[:75] + "!!!"
-        )
-    lines += [
-        "!!!" + " " * 72 + "!!!",
-        "!!!" + "  The merged spreadsheet is INCOMPLETE. Add rows to the ".center(72) + "!!!",
-        "!!!" + "  template's sections, or split the proposal, then re-run.  ".center(72) + "!!!",
-        bar,
-        bar,
-        "",
-    ]
+def warn_merge_issues(context: str, xlsx_path: str,
+                      issues: List[MergeIssue]) -> None:
+    """Print an impossible-to-miss warning for merge problems (a section ran
+    out of rows, or the inputs disagree on a workbook-wide value)."""
+    width = 78
+    inner = width - 8  # room inside "!!! ... !!!"
+
+    def row(text: str = "", center: bool = False) -> str:
+        text = text if len(text) <= inner else text[: inner - 3] + "..."
+        body = text.center(inner) if center else text.ljust(inner)
+        return f"!!! {body} !!!"
+
+    overflows = [i for i in issues if isinstance(i, RowOverflow)]
+    conflicts = [i for i in issues if isinstance(i, ValueConflict)]
+
+    bar = "!" * width
+    lines = ["", bar, bar,
+             row("PROBLEMS WHILE MERGING -- CHECK THE MERGED SPREADSHEET", center=True),
+             bar,
+             row(f"Context : {context}"),
+             row(f"Workbook: {os.path.relpath(xlsx_path)}")]
+    if overflows:
+        lines += [row(), row("RAN OUT OF ROWS (overflow entries were DROPPED):")]
+        for of in overflows:
+            n = of.needed - of.capacity
+            lines.append(row(f"  Section '{of.section}' has {of.capacity} row(s) "
+                             f"but the merge needs {of.needed}."))
+            lines.append(row(f"    -> {n} DROPPED: {', '.join(of.dropped)}"))
+        lines += [row("  Add rows to those template sections, or split the "
+                      "proposal, then re-run.")]
+    if conflicts:
+        lines += [row(), row("CONFLICTING WORKBOOK-WIDE INPUTS:")]
+        for vc in conflicts:
+            lines.append(row(f"  {vc.section}: {vc.detail}"))
+        lines += [row("  The merged totals will NOT equal the sum of the "
+                      "inputs until fixed.")]
+    lines += [bar, bar, ""]
     sys.stderr.write("\n".join(lines) + "\n")
     sys.stderr.flush()
 
@@ -146,10 +153,10 @@ def process_group(name: str, files: List[str], out_dir: str,
 
     # Merged workbook, in the same format as the inputs.
     merged_xlsx = os.path.join(out_dir, merged_xlsx_name)
-    overflows = write_merged_workbook(files, merged_xlsx)
+    issues = write_merged_workbook(files, merged_xlsx)
     print(f"  wrote {os.path.relpath(merged_xlsx)}")
-    if overflows:
-        warn_row_overflow(name, merged_xlsx, overflows)
+    if issues:
+        warn_merge_issues(name, merged_xlsx, issues)
 
     write_defs(merged, group_prefix, os.path.join(out_dir, merged_tex_name),
                header_note=f"Merged total for {name}")
@@ -228,10 +235,10 @@ def run(input_dir: str, output_dir: str) -> None:
     print(f"\n=== Fully merged ({len(all_files)} file(s)) -> {output_dir} ===")
     grand = merge_budgets(all_budgets, source="All programs (merged)")
     grand_xlsx = os.path.join(output_dir, "merged.xlsx")
-    overflows = write_merged_workbook(all_files, grand_xlsx)
+    issues = write_merged_workbook(all_files, grand_xlsx)
     print(f"  wrote {os.path.relpath(grand_xlsx)}")
-    if overflows:
-        warn_row_overflow("All Programs", grand_xlsx, overflows)
+    if issues:
+        warn_merge_issues("All Programs", grand_xlsx, issues)
 
     write_defs(grand, GRAND_PREFIX, os.path.join(output_dir, "merged.tex"),
                header_note="Fully merged total across all programs")

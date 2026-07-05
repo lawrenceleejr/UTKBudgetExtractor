@@ -4,8 +4,10 @@ Run with::
 
     python -m unittest discover -s tests
 
-The tests build a tiny synthetic workbook with known values written into the
-cells the extractor reads, so they do not depend on the large binary template.
+Extractor/LaTeX tests use a tiny synthetic workbook with known values written
+into the cells the extractor reads.  Workbook-merge tests copy the shipped
+template (``examples/Proposal_Budget_Basic.xlsx``) so the real formulas are
+present and formula-safety can be asserted for real.
 """
 
 import os
@@ -20,7 +22,7 @@ from openpyxl import Workbook, load_workbook
 
 from utkbudget import extractor
 from utkbudget.extractor import extract_budget
-from utkbudget.merge import merge_budgets, write_merged_workbook
+from utkbudget.merge import ValueConflict, merge_budgets, write_merged_workbook
 from utkbudget.texdefs import format_value, tex_prefix, write_defs
 from utkbudget.justification import build_document
 
@@ -81,12 +83,16 @@ TEMPLATE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__
                         "examples", "Proposal_Budget_Basic.xlsx")
 
 
-def make_real_input(path, seniors=(), domestic_airfares=()):
+def make_real_input(path, seniors=(), domestic_airfares=(), subcontracts=(),
+                    gras=0, tuition=None):
     """Copy the shipped template (real formulas intact) and set user inputs.
 
     ``seniors`` is a list of ``(name, base_annual, person_months)``; each is
-    written into a senior-personnel row.  ``domestic_airfares`` are written into
-    the Period-1 domestic travel rows on the TRAVEL sheet.
+    written into a senior-personnel row with the same months in every period.
+    ``domestic_airfares`` go into the Period-1 domestic travel rows on the
+    TRAVEL sheet.  ``subcontracts`` is a list of ``(institution, amount)``.
+    ``gras`` fills that many GRA rows; ``tuition`` sets the annual per-GRA
+    tuition cost.
     """
     shutil.copy(TEMPLATE, path)
     wb = load_workbook(path)  # keep formulas
@@ -98,13 +104,29 @@ def make_real_input(path, seniors=(), domestic_airfares=()):
         ws[f"C{r}"] = "UT"
         ws[f"D{r}"] = base
         ws[f"E{r}"] = 9
-        ws[f"F{r}"] = months
+        for col in ["F", "G", "H", "I", "J"]:   # person-months, periods 1-5
+            ws[f"{col}{r}"] = months
+    for i in range(gras):
+        r = list(extractor.GRA_ROWS)[i]
+        ws[f"D{r}"] = 2500
+        ws[f"E{r}"] = 1
+        for col in ["F", "G", "H", "I", "J"]:
+            ws[f"{col}{r}"] = 12
+    if tuition is not None:
+        ws[f"F{extractor.TUITION_ROW}"] = tuition
     if domestic_airfares:
         tr = wb["TRAVEL"]
         for i, air in enumerate(domestic_airfares):
             row = 4 + i  # Period-1 domestic entry rows start at 4
             tr[f"E{row}"] = 1     # travelers
             tr[f"G{row}"] = air   # airfare
+    if subcontracts:
+        sc = wb["SUBCONTRACTS"]
+        for i, (inst, amount) in enumerate(subcontracts):
+            row = 3 + i
+            sc[f"B{row}"] = inst
+            sc[f"E{row}"] = amount
+            sc[f"K{row}"] = "Y"
     wb.save(path)
     return path
 
@@ -187,6 +209,79 @@ class MergeTests(unittest.TestCase):
         self.assertEqual([ws[f"D{rows[i]}"].value for i in range(3)],
                          [100000, 120000, 90000])
         self.assertTrue(str(ws[f"L{rows[0]}"].value).startswith("="))
+        # Person-months are copied for ALL five periods (the period 2-5 salary
+        # formulas read columns G-J), and the raise flag in column A survives.
+        for col in ["F", "G", "H", "I", "J"]:
+            self.assertEqual([ws[f"{col}{rows[i]}"].value for i in range(3)],
+                             [3, 2, 1], f"person-months column {col}")
+        self.assertEqual(ws[f"A{rows[0]}"].value, "Yes")
+
+    def test_subcontracts_concatenated_with_flag(self):
+        # Column K (Y/N) must travel with each subcontract row or the sheet's
+        # own validation breaks the MTDC base.
+        a = make_real_input(os.path.join(self.tmp, "sa.xlsx"),
+                            subcontracts=[("ORNL", 50000)])
+        b = make_real_input(os.path.join(self.tmp, "sb.xlsx"),
+                            subcontracts=[("FNAL", 30000)])
+        out = os.path.join(self.tmp, "smerged.xlsx")
+        write_merged_workbook([a, b], out)
+        sc = load_workbook(out)["SUBCONTRACTS"]
+        self.assertEqual([sc["B3"].value, sc["B4"].value], ["ORNL", "FNAL"])
+        self.assertEqual([sc["E3"].value, sc["E4"].value], [50000, 30000])
+        self.assertEqual([sc["K3"].value, sc["K4"].value], ["Y", "Y"])
+
+    def test_conflicting_tuition_reported(self):
+        # Two inputs both budget GRAs but disagree on the per-GRA tuition cost.
+        # The formulas apply one cost to every merged GRA, so the merge must
+        # flag the conflict (and carry a non-zero value).
+        a = make_real_input(os.path.join(self.tmp, "ca.xlsx"), gras=1, tuition=12000)
+        b = make_real_input(os.path.join(self.tmp, "cb.xlsx"), gras=1, tuition=0)
+        out = os.path.join(self.tmp, "cmerged.xlsx")
+        issues = write_merged_workbook([a, b], out)
+        conflicts = [i for i in issues if isinstance(i, ValueConflict)]
+        self.assertEqual(len(conflicts), 1)
+        self.assertIn("Tuition", conflicts[0].section)
+        ws = load_workbook(out)[extractor.SHEET_NAME]
+        self.assertEqual(ws[f"F{extractor.TUITION_ROW}"].value, 12000)
+
+    def test_consistent_tuition_no_conflict(self):
+        a = make_real_input(os.path.join(self.tmp, "na.xlsx"), gras=2, tuition=12000)
+        b = make_real_input(os.path.join(self.tmp, "nb.xlsx"), gras=1, tuition=12000)
+        out = os.path.join(self.tmp, "nmerged.xlsx")
+        issues = write_merged_workbook([a, b], out)
+        self.assertEqual([i for i in issues if isinstance(i, ValueConflict)], [])
+        # GRA rows concatenated: 3 of 4 slots filled
+        ws = load_workbook(out)[extractor.SHEET_NAME]
+        gra_rows = list(extractor.GRA_ROWS)
+        self.assertEqual([ws[f"D{r}"].value for r in gra_rows],
+                         [2500, 2500, 2500, None])
+
+    def test_no_formula_cell_modified_anywhere(self):
+        # The rock-solid invariant: after a merge, every formula cell on every
+        # sheet is byte-for-byte identical to the template's.
+        a = make_real_input(os.path.join(self.tmp, "ia.xlsx"),
+                            seniors=[("Alice", 100000, 3)],
+                            domestic_airfares=[500],
+                            subcontracts=[("ORNL", 50000)])
+        b = make_real_input(os.path.join(self.tmp, "ib.xlsx"),
+                            seniors=[("Bob", 120000, 2)],
+                            domestic_airfares=[700])
+        out = os.path.join(self.tmp, "imerged.xlsx")
+        write_merged_workbook([a, b], out)
+        template = load_workbook(a)  # first input is the structural template
+        merged = load_workbook(out)
+        checked = 0
+        for sheet in template.sheetnames:
+            ws_t, ws_m = template[sheet], merged[sheet]
+            for row in ws_t.iter_rows():
+                for cell in row:
+                    v = cell.value
+                    if isinstance(v, str) and v.startswith("="):
+                        self.assertEqual(
+                            ws_m[cell.coordinate].value, v,
+                            f"formula clobbered at {sheet}!{cell.coordinate}")
+                        checked += 1
+        self.assertGreater(checked, 1000)  # sanity: we really scanned formulas
 
     def test_fringe_rates_untouched(self):
         # Fringe rates (column F on the fringe rows) ship with the template and

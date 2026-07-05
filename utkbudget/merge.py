@@ -10,12 +10,14 @@ Two products are produced from a set of budgets:
 
 The workbook merge is **formula-safe**: it never writes into a cell that holds a
 formula.  Only genuine *user-input* cells are copied -- on the main sheet the
-personnel inputs (name, base salary, appointment, person-months, tenure flags),
-fringe rates, equipment descriptions/costs, the manually-entered other-direct
-amounts, and the per-GRA tuition costs; and on the TRAVEL / SUPPLIES /
-SUBCONTRACTS / PARTICIPANT SUPPORT detail sheets the per-line entries.  Every
-subtotal, total, salary, fringe, tuition, F&A, and roll-up formula is left
-untouched so Excel recomputes the correct combined budget on open.
+personnel inputs (name, raise flag, UT/JFO, base salary, appointment, per-period
+person-months, tenure flags), equipment descriptions/costs, the manually-entered
+other-direct amounts, and the per-GRA tuition costs; and on the TRAVEL /
+SUPPLIES / SUBCONTRACTS / PARTICIPANT SUPPORT detail sheets the per-line
+entries.  The fringe-rate cells are institutional constants that ship with the
+template and are never touched.  Every subtotal, total, salary, fringe, tuition,
+F&A, and roll-up formula is left untouched so Excel recomputes the correct
+combined budget on open.
 
 Line items are *concatenated* into the template's fixed sections.  If a section
 has more line items than rows, the overflow is dropped and reported so the
@@ -24,9 +26,10 @@ caller can raise a prominent warning.
 
 from __future__ import annotations
 
+import os
 import warnings as _warnings
 from dataclasses import dataclass
-from typing import List, Optional, Sequence, Tuple
+from typing import List, Optional, Sequence, Tuple, Union
 
 from openpyxl import load_workbook
 
@@ -84,6 +87,16 @@ class RowOverflow:
     dropped: List[str]
 
 
+@dataclass
+class ValueConflict:
+    """Reported when inputs disagree on a workbook-wide (non-summable) input."""
+    section: str
+    detail: str
+
+
+MergeIssue = Union[RowOverflow, ValueConflict]
+
+
 def _num(value) -> float:
     try:
         return float(value) if value not in (None, "") else 0.0
@@ -126,44 +139,58 @@ def _resolve_sheet(wb, name: str):
 
 # -- Personnel ---------------------------------------------------------------
 
-# (label, personnel rows, matching fringe rows, name_in_b)
+# (label, personnel rows, name_in_b).  ``name_in_b`` marks groups whose column B
+# holds an actual person's name (the senior-personnel section); elsewhere column
+# B is a fixed role label ("Post Doc(s)", "GRA(s)", ...) that ships with the
+# template and is left alone.  The fringe rows (44-69) are never touched: their
+# names and amounts are formulas, and the rates are the institution's standard
+# rates that ship with the template.
 PERSONNEL_GROUPS = [
-    ("Senior Personnel", X.SENIOR_ROWS, X.SENIOR_FRINGE_ROWS, True),
-    ("Post Docs", X.POSTDOC_ROWS, X.POSTDOC_FRINGE_ROWS, False),
-    ("Other Professionals", X.OTHER_PROF_ROWS, X.OTHER_PROF_FRINGE_ROWS, False),
-    ("Graduate Research Assistants", X.GRA_ROWS, X.GRA_FRINGE_ROWS, False),
-    ("Undergraduate Researchers", [X.UNDERGRAD_ROW], [X.UNDERGRAD_FRINGE_ROW], False),
-    ("Admin/Clerical", [X.ADMIN_ROW], [X.ADMIN_FRINGE_ROW], False),
-    ("Other Personnel", X.OTHER_STAFF_ROWS, X.OTHER_STAFF_FRINGE_ROWS, False),
+    ("Senior Personnel", X.SENIOR_ROWS, True),
+    ("Post Docs", X.POSTDOC_ROWS, False),
+    ("Other Professionals", X.OTHER_PROF_ROWS, False),
+    ("Graduate Research Assistants", X.GRA_ROWS, False),
+    ("Undergraduate Researchers", [X.UNDERGRAD_ROW], False),
+    ("Admin/Clerical", [X.ADMIN_ROW], False),
+    ("Other Personnel", X.OTHER_STAFF_ROWS, False),
 ]
 
-# User-input columns feeding the salary formula (D=base, E=appt divisor,
-# F=person-months, S/T/U=tenure flags).  The period columns L-P are formulas
-# and recompute from these.
-PERSONNEL_INPUT_COLS = ["C", "D", "E", "F", "S", "T", "U"]
+# User-input columns feeding the salary formulas, per the template:
+#   A = apply-annual-raise flag ("Yes"/"No")
+#   C = UT / JFO / GRA (selects the inflation rate)
+#   D = base salary,  E = appointment divisor or headcount
+#   F..J = person-months for periods 1-5
+# The period salary columns L-P are formulas over these and recompute.
+PERSONNEL_INPUT_COLS = ["A", "C", "D", "E", "F", "G", "H", "I", "J"]
+# Tenure inputs referenced only by the senior-personnel salary formulas.
+SENIOR_TENURE_COLS = ["S", "T", "U"]
+PERSON_MONTH_COLS = ["F", "G", "H", "I", "J"]
 
 
 def _merge_personnel(ws_t, value_sheets) -> List[RowOverflow]:
     overflows = []
-    for label, pers_rows, fringe_rows, name_in_b in PERSONNEL_GROUPS:
+    for label, pers_rows, name_in_b in PERSONNEL_GROUPS:
         pers_rows = list(pers_rows)
-        cols = (["B"] if name_in_b else []) + PERSONNEL_INPUT_COLS
+        cols = list(PERSONNEL_INPUT_COLS)
+        if name_in_b:
+            cols = ["B"] + cols + SENIOR_TENURE_COLS
 
+        # An entry is "real" if it carries a base salary, any person-months, or
+        # any cached period salary.
         entries = []
         for vs in value_sheets:
             for prow in pers_rows:
-                periods = [vs[f"{c}{prow}"].value for c in PERIOD_COLS]
-                base = vs[f"D{prow}"].value
-                if not (any(_num(p) for p in periods) or _num(base)):
+                signal = ([vs[f"D{prow}"].value]
+                          + [vs[f"{c}{prow}"].value for c in PERSON_MONTH_COLS]
+                          + [vs[f"{c}{prow}"].value for c in PERIOD_COLS])
+                if not any(_num(v) for v in signal):
                     continue
                 entry = {c: vs[f"{c}{prow}"].value for c in cols}
                 entry["_name"] = vs[f"B{prow}"].value
                 entries.append(entry)
 
-        # Clear each slot's input columns (formula-safe).  The fringe-rate cells
-        # (column F on the fringe rows) are deliberately left untouched -- they
-        # are the institution's standard rates that ship with the template, so
-        # the merged fringe amounts use them as-is.
+        # Clear each slot's input columns, then stack the entries (formula-safe
+        # throughout: _set never writes into a formula cell).
         for prow in pers_rows:
             for c in cols:
                 _set(ws_t, prow, c, None)
@@ -267,7 +294,10 @@ def _supplies_specs(sheet: str) -> List[StackSpec]:
 
 
 def _subcontracts_specs(sheet: str) -> List[StackSpec]:
-    cols = ["B", "C", "E", "F", "G", "H", "I"]       # B/C=names, E-I=periods
+    # B/C = institution & lead, E-I = per-period amounts, K = the required
+    # Y/N flag (the sheet's own validation errors out -- breaking the MTDC
+    # base -- whenever a row has an institution but no K value).
+    cols = ["B", "C", "E", "F", "G", "H", "I", "K"]
     return [StackSpec(sheet, list(range(3, 18)), [(0, c) for c in cols],
                       [(0, c) for c in ["E", "F", "G", "H", "I"]],
                       "Subcontracts", name_cell=(0, "B"))]
@@ -275,7 +305,8 @@ def _subcontracts_specs(sheet: str) -> List[StackSpec]:
 
 def _participant_specs(sheet, ws) -> List[StackSpec]:
     """PARTICIPANT SUPPORT: a fixed number of participant-cost blocks (each a
-    "Number of Participants" row plus per-participant cost categories).
+    description, a "Number of Participants" row, and per-participant cost
+    categories).
 
     Blocks are located by their header label rather than assumed to repeat on a
     fixed stride, so we never write past the real blocks (the sheet ends them
@@ -283,21 +314,38 @@ def _participant_specs(sheet, ws) -> List[StackSpec]:
     anchors = [r for r in range(1, ws.max_row + 1)
                if isinstance(ws[f"A{r}"].value, str)
                and ws[f"A{r}"].value.strip().startswith("PARTICIPANT SUPPORT")]
+    desc = [(0, "D")]                                   # workshop description
     num = [(2, c) for c in ["F", "G", "H", "I", "J"]]   # participants per period
     costs = [(d, "B") for d in range(6, 12)]            # cost per participant
-    return [StackSpec(sheet, anchors, num + costs, num, "Participant Support")]
+    return [StackSpec(sheet, anchors, desc + num + costs, num,
+                      "Participant Support", name_cell=(0, "D"))]
 
 
 # -- Single-value leaves -----------------------------------------------------
 
 # Manually-entered other-direct rows (Publication, Shipping, ...).  Their period
-# cells are plain numbers and are summed across inputs; the Supplies/Subcontracts
-# rows are formulas (driven by their detail sheets) and are left alone.
-MANUAL_OTHER_DIRECT_ROWS = [89, 90, 91, 92, 93, 95, 96, 97]
-# Per-GRA tuition / fee costs (column F) -- carried from the first input.
-TUITION_COST_CELLS = [(X.TUITION_ROW, "F"),
-                      (X.DIFFERENTIAL_TUITION_ROW, "F"),
-                      (X.MANDATORY_FEES_ROW, "F")]
+# cells are plain numbers and are summed across inputs; the Supplies and
+# Subcontracts rows are formulas (driven by their detail sheets) and left alone.
+MANUAL_OTHER_DIRECT_ROWS = [row for name, row in X.OTHER_DIRECT_ROWS.items()
+                            if name not in ("Supplies", "Subcontracts")]
+# Per-GRA tuition / fee costs (column F).  These are *global* inputs: the
+# tuition formulas apply them to every GRA row, so they can only be carried --
+# and only honestly when every input that budgets GRAs uses the same values.
+TUITION_COST_CELLS = [(X.TUITION_ROW, "F", "Tuition (annual cost per GRA)"),
+                      (X.DIFFERENTIAL_TUITION_ROW, "F", "Differential tuition per GRA"),
+                      (X.MANDATORY_FEES_ROW, "F", "Mandatory fees per GRA")]
+
+# Other workbook-wide inputs that cannot be summed, only carried from the first
+# input.  If the inputs disagree, the merged totals cannot equal the sum of the
+# input totals, so a conflict is reported for the big warning.
+GLOBAL_INPUT_CELLS = [
+    ("D6", "Salary inflation rate (UT)"),
+    ("D7", "Salary inflation rate (JFO)"),
+    ("D8", "Salary inflation rate (GRA)"),
+    ("D9", "Tuition/fees inflation rate"),
+    ("B108", "F&A base type"),
+    ("D110", "F&A rate type"),
+]
 
 
 def _sum_cells(ws_t, value_sheets, rows, cols) -> None:
@@ -307,13 +355,51 @@ def _sum_cells(ws_t, value_sheets, rows, cols) -> None:
             _set(ws_t, r, c, total)
 
 
-def _carry_cells(ws_t, value_sheets, cells) -> None:
-    for r, c in cells:
-        for vs in value_sheets:
-            v = vs[f"{c}{r}"].value
-            if _present_name(v) or _num(v):
-                _set(ws_t, r, c, v)
-                break
+def _has_gra_months(vs) -> bool:
+    return any(_num(vs[f"{c}{r}"].value)
+               for r in X.GRA_ROWS for c in PERSON_MONTH_COLS)
+
+
+def _merge_tuition(ws_t, value_sheets, paths) -> List["ValueConflict"]:
+    """Carry the per-GRA tuition/fee costs; report conflicts.
+
+    Only inputs that actually budget GRA months matter -- the costs apply per
+    GRA.  When those inputs disagree (including one budgeting tuition and
+    another not), the merged workbook cannot reproduce the sum of the inputs
+    (the formulas apply one cost to every merged GRA), so a conflict is
+    returned for the caller's warning banner.
+    """
+    conflicts = []
+    relevant = [(vs, p) for vs, p in zip(value_sheets, paths) if _has_gra_months(vs)]
+    for r, c, label in TUITION_COST_CELLS:
+        seen = {}
+        for vs, p in relevant:
+            seen.setdefault(_num(vs[f"{c}{r}"].value), []).append(os.path.basename(p))
+        nonzero = [v for v in seen if v]
+        if nonzero:
+            _set(ws_t, r, c, nonzero[0])
+        if len(seen) > 1:
+            detail = "; ".join(f"{v:,.0f} in {', '.join(fs)}" for v, fs in seen.items())
+            conflicts.append(ValueConflict(
+                label, f"inputs with GRAs disagree ({detail}); the merged sheet "
+                       f"applies one value to every GRA -- fix cell {c}{r} by hand"))
+    return conflicts
+
+
+def _check_global_conflicts(value_sheets, paths) -> List["ValueConflict"]:
+    conflicts = []
+    for cell, label in GLOBAL_INPUT_CELLS:
+        seen = {}
+        for vs, p in zip(value_sheets, paths):
+            v = vs[cell].value
+            if v not in (None, ""):
+                seen.setdefault(str(v), []).append(os.path.basename(p))
+        if len(seen) > 1:
+            detail = "; ".join(f"{v!r} in {', '.join(fs)}" for v, fs in seen.items())
+            conflicts.append(ValueConflict(
+                f"{label} [{cell}]",
+                f"inputs disagree ({detail}); merged uses the first input's value"))
+    return conflicts
 
 
 def _set_metadata(ws_t, value_sheets, n_inputs) -> None:
@@ -329,12 +415,15 @@ def write_merged_workbook(
     input_paths: Sequence[str],
     out_path: str,
     template_path: Optional[str] = None,
-) -> List[RowOverflow]:
+) -> List[MergeIssue]:
     """Merge ``input_paths`` into a single budget workbook at ``out_path``.
 
     Only user-input cells are copied; formulas are never overwritten and
     recompute when the workbook is opened in Excel.  Returns a list of
-    :class:`RowOverflow` for any section that ran out of rows.
+    :class:`RowOverflow` (a section ran out of rows; overflow entries dropped)
+    and :class:`ValueConflict` (inputs disagree on a workbook-wide input such
+    as an inflation rate, the F&A type, or the per-GRA tuition cost) records --
+    empty when the merge is exact.
     """
     input_paths = list(input_paths)
     if not input_paths:
@@ -351,16 +440,17 @@ def write_merged_workbook(
     ws_t = template_wb[SHEET_NAME]
     main_values = [wb[SHEET_NAME] for wb in value_wbs]
 
-    overflows: List[RowOverflow] = []
+    issues: List[MergeIssue] = []
 
     # --- Main sheet: personnel, equipment, manual leaves, tuition, metadata
-    overflows.extend(_merge_personnel(ws_t, main_values))
+    issues.extend(_merge_personnel(ws_t, main_values))
     for spec in _main_sheet_specs():
         of = _stack(ws_t, main_values, spec)
         if of:
-            overflows.append(of)
+            issues.append(of)
     _sum_cells(ws_t, main_values, MANUAL_OTHER_DIRECT_ROWS, PERIOD_COLS)
-    _carry_cells(ws_t, main_values, TUITION_COST_CELLS)
+    issues.extend(_merge_tuition(ws_t, main_values, input_paths))
+    issues.extend(_check_global_conflicts(main_values, input_paths))
     _set_metadata(ws_t, main_values, len(input_paths))
 
     # --- Detail sheets (so the main-sheet formula leaves recompute) --------
@@ -379,7 +469,7 @@ def write_merged_workbook(
         for spec in builder(ws_detail.title):
             of = _stack(ws_detail, detail_values, spec)
             if of:
-                overflows.append(of)
+                issues.append(of)
 
     ws_part = _resolve_sheet(template_wb, "PARTICIPANT SUPPORT COSTS")
     if ws_part is not None:
@@ -389,7 +479,7 @@ def write_merged_workbook(
         for spec in _participant_specs(ws_part.title, ws_part):
             of = _stack(ws_part, part_values, spec)
             if of:
-                overflows.append(of)
+                issues.append(of)
 
     template_wb.save(out_path)
-    return overflows
+    return issues
