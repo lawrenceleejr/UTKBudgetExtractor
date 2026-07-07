@@ -112,26 +112,40 @@ formula — only genuine user-input cells are copied** — and every subtotal,
 total, salary, fringe, tuition, F&A, and roll-up formula recomputes from those
 inputs when the workbook is opened in Excel.
 
-- **Line items are concatenated.** Each input's senior personnel, postdocs,
-  other professionals, GRAs, undergraduates, admin/clerical, other personnel,
-  and equipment items are stacked, in file order, into the template's sections.
-  For each person the *inputs* are copied (name, raise flag, UT/JFO, base
-  salary, appointment, person-months for all five periods, and tenure flags);
-  the salary and fringe amounts are formulas and recompute. The fringe-rate
-  cells are institutional constants that ship with the template and are never
-  touched.
-- **Detail sheets are merged too.** Travel trips (per period, domestic/foreign),
-  supply lines, subcontract lines, and participant-support blocks are
-  concatenated on the `TRAVEL`, `SUPPLIES`, `SUBCONTRACTS`, and `PARTICIPANT
-  SUPPORT COSTS` sheets, so the main-sheet totals that reference them recompute.
-- **Manually-entered other-direct costs** (publication, shipping, etc.) are
-  summed; the per-GRA tuition/fee costs are carried (tuition recomputes for the
-  merged GRA count).
-- **If a section runs out of rows** — e.g. more than 12 senior personnel, more
-  than 4 GRAs, or more than 10 domestic trips in a period across the merged
-  proposals — the overflow entries are dropped and the tool prints a large,
-  impossible-to-miss warning naming the section and the dropped entries. Add
-  rows to that section in the template and re-run, or split the proposal.
+Sections are combined in the way that best fits each one, and for every person
+the *inputs* are copied (name, raise flag, UT/JFO, base salary, appointment,
+person-months for all five periods, tenure flags) — the salary, fringe, and
+totals are formulas that recompute. Fringe rates are institutional constants
+that ship with the template and are never touched.
+
+- **Named people are concatenated** (one row each): senior personnel, other
+  professionals, admin/clerical, other personnel, and equipment.
+- **Post-docs and GRAs are consolidated by base salary.** Lines that share a
+  base salary become one line whose per-period months are the sum of
+  `headcount × months`. Because the salary formula is linear in
+  `headcount × months`, this reproduces the cost exactly — and it lets you merge
+  **more than four GRAs** (or more than three post-docs) as long as they share a
+  base. Distinct base salaries stay on separate lines.
+- **Undergraduate researchers collapse to a single line** (months summed; if the
+  bases differ the line is normalised to a $1 base with `Σ(base × months)` so
+  the cost is still exact).
+- **Travel is consolidated to one domestic and one foreign summary row per
+  period**, reproducing each period's subtotal exactly (the row carries the
+  per-category totals with days = travelers = 1).
+- **Supplies are grouped by description and summed**; subcontracts and
+  participant-support blocks are concatenated. Manually-entered other-direct
+  costs (publication, shipping, …) are summed; the per-GRA tuition/fee costs are
+  carried (tuition recomputes for the merged GRA count).
+- **If a section still overflows** — e.g. more than four *distinct* GRA base
+  salaries, or more than twelve senior personnel — the overflow entries are
+  dropped and the tool prints a large, impossible-to-miss warning naming the
+  section and the dropped entries. Add rows to that template section and re-run,
+  or split the proposal.
+
+> Consolidating lines means the spreadsheet applies its per-line `ROUND()` fewer
+> times, so a consolidated total can differ from the naive sum of the separately
+> rounded inputs by a few dollars (the consolidated figure is the more accurate
+> one). Non-rounded categories match to the cent.
 - **Workbook-wide inputs are checked for conflicts.** Some inputs cannot be
   summed — the salary/tuition inflation rates, the F&A base and rate type, and
   the per-GRA tuition/fee costs apply to the whole workbook. The merge carries

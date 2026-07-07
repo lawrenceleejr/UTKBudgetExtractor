@@ -22,7 +22,8 @@ from openpyxl import Workbook, load_workbook
 
 from utkbudget import extractor
 from utkbudget.extractor import extract_budget
-from utkbudget.merge import ValueConflict, merge_budgets, write_merged_workbook
+from utkbudget.merge import (RowOverflow, ValueConflict, merge_budgets,
+                             write_merged_workbook)
 from utkbudget.texdefs import format_value, tex_prefix, write_defs
 from utkbudget.justification import build_document
 
@@ -83,50 +84,67 @@ TEMPLATE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__
                         "examples", "Proposal_Budget_Basic.xlsx")
 
 
-def make_real_input(path, seniors=(), domestic_airfares=(), subcontracts=(),
-                    gras=0, tuition=None):
+def make_real_input(path, seniors=(), domestic_airfares=(), foreign_airfares=(),
+                    subcontracts=(), gras=0, gra_lines=(), postdocs=(),
+                    undergrads=(), supplies=(), tuition=None):
     """Copy the shipped template (real formulas intact) and set user inputs.
 
-    ``seniors`` is a list of ``(name, base_annual, person_months)``; each is
-    written into a senior-personnel row with the same months in every period.
-    ``domestic_airfares`` go into the Period-1 domestic travel rows on the
-    TRAVEL sheet.  ``subcontracts`` is a list of ``(institution, amount)``.
-    ``gras`` fills that many GRA rows; ``tuition`` sets the annual per-GRA
-    tuition cost.
+    * ``seniors``   -- ``(name, base_annual, person_months)`` per senior row.
+    * ``gras``      -- N GRA rows at $2500 base / 12 months (shorthand).
+    * ``gra_lines`` -- ``(base_monthly, months)`` per GRA row (explicit).
+    * ``postdocs``/``undergrads`` -- ``(base_monthly, months)`` per row.
+    * ``domestic_airfares``/``foreign_airfares`` -- airfare per travel row
+      (3 days, 1 traveler).
+    * ``subcontracts`` -- ``(institution, amount)`` per row.
+    * ``supplies``  -- ``(description, period1_amount)`` per row.
+    * ``tuition``   -- annual per-GRA tuition cost.
     """
     shutil.copy(TEMPLATE, path)
     wb = load_workbook(path)  # keep formulas
     ws = wb[extractor.SHEET_NAME]
-    senior_rows = list(extractor.SENIOR_ROWS)
+    PMONTHS = ["F", "G", "H", "I", "J"]
+
     for i, (name, base, months) in enumerate(seniors):
-        r = senior_rows[i]
-        ws[f"B{r}"] = name
-        ws[f"C{r}"] = "UT"
-        ws[f"D{r}"] = base
-        ws[f"E{r}"] = 9
-        for col in ["F", "G", "H", "I", "J"]:   # person-months, periods 1-5
+        r = list(extractor.SENIOR_ROWS)[i]
+        ws[f"B{r}"], ws[f"C{r}"], ws[f"D{r}"], ws[f"E{r}"] = name, "UT", base, 9
+        for col in PMONTHS:
             ws[f"{col}{r}"] = months
-    for i in range(gras):
-        r = list(extractor.GRA_ROWS)[i]
-        ws[f"D{r}"] = 2500
-        ws[f"E{r}"] = 1
-        for col in ["F", "G", "H", "I", "J"]:
-            ws[f"{col}{r}"] = 12
+
+    def other_personnel(rows, C, entries):
+        for i, (base, months) in enumerate(entries):
+            r = list(rows)[i]
+            ws[f"C{r}"], ws[f"D{r}"], ws[f"E{r}"] = C, base, 1
+            for col in PMONTHS:
+                ws[f"{col}{r}"] = months
+
+    other_personnel(extractor.POSTDOC_ROWS, "UT", postdocs)
+    gra_entries = list(gra_lines) + [(2500, 12)] * gras
+    other_personnel(extractor.GRA_ROWS, "GRA", gra_entries)
+    other_personnel([extractor.UNDERGRAD_ROW], "UT", undergrads)
+
     if tuition is not None:
         ws[f"F{extractor.TUITION_ROW}"] = tuition
-    if domestic_airfares:
+
+    def travel(first_row, airfares):
         tr = wb["TRAVEL"]
-        for i, air in enumerate(domestic_airfares):
-            row = 4 + i  # Period-1 domestic entry rows start at 4
-            tr[f"E{row}"] = 1     # travelers
-            tr[f"G{row}"] = air   # airfare
+        for i, air in enumerate(airfares):
+            r = first_row + i
+            tr[f"D{r}"], tr[f"E{r}"], tr[f"G{r}"] = 3, 1, air  # days, travelers, airfare
+    travel(4, domestic_airfares)    # Period-1 domestic rows 4-13
+    travel(16, foreign_airfares)    # Period-1 foreign rows 16-20
+
     if subcontracts:
         sc = wb["SUBCONTRACTS"]
         for i, (inst, amount) in enumerate(subcontracts):
-            row = 3 + i
-            sc[f"B{row}"] = inst
-            sc[f"E{row}"] = amount
-            sc[f"K{row}"] = "Y"
+            r = 3 + i
+            sc[f"B{r}"], sc[f"E{r}"], sc[f"K{r}"] = inst, amount, "Y"
+
+    if supplies:
+        sp = wb["SUPPLIES "]
+        for i, (desc, amount) in enumerate(supplies):
+            r = 3 + i
+            sp[f"A{r}"], sp[f"B{r}"] = desc, amount
+
     wb.save(path)
     return path
 
@@ -250,11 +268,124 @@ class MergeTests(unittest.TestCase):
         out = os.path.join(self.tmp, "nmerged.xlsx")
         issues = write_merged_workbook([a, b], out)
         self.assertEqual([i for i in issues if isinstance(i, ValueConflict)], [])
-        # GRA rows concatenated: 3 of 4 slots filled
+        # 3 GRAs at the same base consolidate into ONE line (12*3 = 36 months).
         ws = load_workbook(out)[extractor.SHEET_NAME]
         gra_rows = list(extractor.GRA_ROWS)
         self.assertEqual([ws[f"D{r}"].value for r in gra_rows],
-                         [2500, 2500, 2500, None])
+                         [2500, None, None, None])
+        self.assertEqual(ws[f"F{gra_rows[0]}"].value, 36)
+        self.assertEqual(ws[f"E{gra_rows[0]}"].value, 1)
+
+    def test_gras_consolidated_beyond_capacity(self):
+        # Six GRAs at one base (more than the 4 rows) across two files must
+        # consolidate to a single line -- no overflow.
+        a = make_real_input(os.path.join(self.tmp, "ga.xlsx"),
+                            gra_lines=[(2500, 12)] * 3, tuition=12000)
+        b = make_real_input(os.path.join(self.tmp, "gb.xlsx"),
+                            gra_lines=[(2500, 12)] * 3, tuition=12000)
+        out = os.path.join(self.tmp, "gmerged.xlsx")
+        issues = write_merged_workbook([a, b], out)
+        self.assertEqual([i for i in issues if isinstance(i, RowOverflow)], [])
+        ws = load_workbook(out)[extractor.SHEET_NAME]
+        gra_rows = list(extractor.GRA_ROWS)
+        self.assertEqual(ws[f"D{gra_rows[0]}"].value, 2500)
+        self.assertEqual(ws[f"F{gra_rows[0]}"].value, 72)  # 6 GRAs * 12 months
+        self.assertIsNone(ws[f"D{gra_rows[1]}"].value)
+
+    def test_gras_distinct_bases_stay_separate_and_overflow(self):
+        # Five distinct GRA base salaries cannot be consolidated -> 5 lines > 4.
+        a = make_real_input(os.path.join(self.tmp, "da.xlsx"),
+                            gra_lines=[(2000, 12), (2500, 12), (3000, 12)])
+        b = make_real_input(os.path.join(self.tmp, "db.xlsx"),
+                            gra_lines=[(3500, 12), (4000, 12)])
+        out = os.path.join(self.tmp, "dmerged.xlsx")
+        issues = write_merged_workbook([a, b], out)
+        gra_of = [i for i in issues if isinstance(i, RowOverflow)
+                  and "Graduate" in i.section]
+        self.assertEqual(len(gra_of), 1)
+        self.assertEqual(gra_of[0].needed, 5)
+        self.assertEqual(gra_of[0].capacity, 4)
+        # Distinct bases occupy the four rows, largest first.
+        ws = load_workbook(out)[extractor.SHEET_NAME]
+        gra_rows = list(extractor.GRA_ROWS)
+        self.assertEqual([ws[f"D{r}"].value for r in gra_rows],
+                         [4000, 3500, 3000, 2500])
+
+    def test_postdocs_grouped_by_base(self):
+        a = make_real_input(os.path.join(self.tmp, "poa.xlsx"),
+                            postdocs=[(5000, 12), (5000, 12)])
+        b = make_real_input(os.path.join(self.tmp, "pob.xlsx"),
+                            postdocs=[(6000, 12)])
+        out = os.path.join(self.tmp, "pomerged.xlsx")
+        write_merged_workbook([a, b], out)
+        ws = load_workbook(out)[extractor.SHEET_NAME]
+        pd = list(extractor.POSTDOC_ROWS)
+        # Two distinct bases -> two lines (largest base first); $5000 has 24 mo.
+        self.assertEqual(ws[f"D{pd[0]}"].value, 6000)
+        self.assertEqual(ws[f"F{pd[0]}"].value, 12)
+        self.assertEqual(ws[f"D{pd[1]}"].value, 5000)
+        self.assertEqual(ws[f"F{pd[1]}"].value, 24)
+        self.assertIsNone(ws[f"D{pd[2]}"].value)
+
+    def test_same_base_different_type_stay_separate(self):
+        # Two $5000 post-docs escalate differently if one is UT and one JFO, so
+        # they must NOT be merged onto one line (years 2-5 would be wrong).
+        a = make_real_input(os.path.join(self.tmp, "xa.xlsx"), postdocs=[(5000, 12)])
+        b = make_real_input(os.path.join(self.tmp, "xb.xlsx"), postdocs=[(5000, 12)])
+        wb = load_workbook(b)
+        wb[extractor.SHEET_NAME]["C26"] = "JFO"   # different escalation rate
+        wb.save(b)
+        out = os.path.join(self.tmp, "xmerged.xlsx")
+        write_merged_workbook([a, b], out)
+        ws = load_workbook(out)[extractor.SHEET_NAME]
+        pd = list(extractor.POSTDOC_ROWS)
+        self.assertEqual(ws[f"D{pd[0]}"].value, 5000)
+        self.assertEqual(ws[f"D{pd[1]}"].value, 5000)
+        self.assertEqual(ws[f"F{pd[0]}"].value, 12)   # each keeps its own 12 mo
+        self.assertEqual(ws[f"F{pd[1]}"].value, 12)
+        self.assertNotEqual(ws[f"C{pd[0]}"].value, ws[f"C{pd[1]}"].value)
+
+    def test_undergrads_collapse_to_one_line(self):
+        a = make_real_input(os.path.join(self.tmp, "ua.xlsx"),
+                            undergrads=[(600, 3)])
+        b = make_real_input(os.path.join(self.tmp, "ub.xlsx"),
+                            undergrads=[(600, 4)])
+        out = os.path.join(self.tmp, "umerged.xlsx")
+        write_merged_workbook([a, b], out)
+        ws = load_workbook(out)[extractor.SHEET_NAME]
+        r = extractor.UNDERGRAD_ROW
+        # Same base -> keep base, sum months (3 + 4 = 7).
+        self.assertEqual(ws[f"D{r}"].value, 600)
+        self.assertEqual(ws[f"F{r}"].value, 7)
+
+    def test_undergrads_mixed_base_collapse_normalized(self):
+        # Different bases still collapse to ONE line, normalised to base=1 with
+        # months = sum(base * headcount * months) so the cost is preserved.
+        a = make_real_input(os.path.join(self.tmp, "uma.xlsx"),
+                            undergrads=[(600, 3)])
+        b = make_real_input(os.path.join(self.tmp, "umb.xlsx"),
+                            undergrads=[(700, 4)])
+        out = os.path.join(self.tmp, "ummerged.xlsx")
+        write_merged_workbook([a, b], out)
+        ws = load_workbook(out)[extractor.SHEET_NAME]
+        r = extractor.UNDERGRAD_ROW
+        self.assertEqual(ws[f"D{r}"].value, 1)
+        self.assertEqual(ws[f"F{r}"].value, 600 * 3 + 700 * 4)  # 4600
+
+    def test_supplies_grouped_by_description(self):
+        a = make_real_input(os.path.join(self.tmp, "sua.xlsx"),
+                            supplies=[("Computers", 2000), ("Chemicals", 500)])
+        b = make_real_input(os.path.join(self.tmp, "sub.xlsx"),
+                            supplies=[("Computers", 1500)])
+        out = os.path.join(self.tmp, "sumerged.xlsx")
+        write_merged_workbook([a, b], out)
+        sp = load_workbook(out)["SUPPLIES "]
+        # "Computers" merges to one line (2000 + 1500); "Chemicals" separate.
+        self.assertEqual(sp["A3"].value, "Computers")
+        self.assertEqual(sp["B3"].value, 3500)
+        self.assertEqual(sp["A4"].value, "Chemicals")
+        self.assertEqual(sp["B4"].value, 500)
+        self.assertIsNone(sp["A5"].value)
 
     def test_no_formula_cell_modified_anywhere(self):
         # The rock-solid invariant: after a merge, every formula cell on every
@@ -304,16 +435,23 @@ class MergeTests(unittest.TestCase):
         for r in range(44, 56):
             self.assertEqual(merged[f"F{r}"].value, template[f"F{r}"].value)
 
-    def test_travel_entries_concatenated(self):
-        a = make_real_input(os.path.join(self.tmp, "ta.xlsx"), domestic_airfares=[500])
-        b = make_real_input(os.path.join(self.tmp, "tb.xlsx"), domestic_airfares=[700])
+    def test_travel_consolidated_per_period(self):
+        # Trips across files collapse to ONE summary row per period/kind, with
+        # days=1 and travelers=1 so the subtotal formula reproduces the total.
+        a = make_real_input(os.path.join(self.tmp, "ta.xlsx"),
+                            domestic_airfares=[500], foreign_airfares=[1500])
+        b = make_real_input(os.path.join(self.tmp, "tb.xlsx"),
+                            domestic_airfares=[700])
         out = os.path.join(self.tmp, "tmerged.xlsx")
         write_merged_workbook([a, b], out)
-        wb = load_workbook(out)
-        tr = wb["TRAVEL"]
-        # Period-1 domestic entries start at row 4; both files' airfares stack.
-        self.assertEqual(tr["G4"].value, 500)
-        self.assertEqual(tr["G5"].value, 700)
+        tr = load_workbook(out)["TRAVEL"]
+        # One domestic summary row (row 4): airfare = 500 + 700 (each 1 traveler).
+        self.assertEqual(tr["G4"].value, 1200)
+        self.assertEqual(tr["D4"].value, 1)   # days set (>0) so the total is valid
+        self.assertEqual(tr["E4"].value, 1)   # travelers
+        self.assertIsNone(tr["G5"].value)     # remaining trip rows cleared
+        # Foreign summary row (row 16): airfare = 1500.
+        self.assertEqual(tr["G16"].value, 1500)
         # The per-row total stays a formula.
         self.assertTrue(str(tr["K4"].value).startswith("="))
 

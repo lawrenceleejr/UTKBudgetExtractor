@@ -9,25 +9,33 @@ Two products are produced from a set of budgets:
   input spreadsheets*.
 
 The workbook merge is **formula-safe**: it never writes into a cell that holds a
-formula.  Only genuine *user-input* cells are copied -- on the main sheet the
-personnel inputs (name, raise flag, UT/JFO, base salary, appointment, per-period
-person-months, tenure flags), equipment descriptions/costs, the manually-entered
-other-direct amounts, and the per-GRA tuition costs; and on the TRAVEL /
-SUPPLIES / SUBCONTRACTS / PARTICIPANT SUPPORT detail sheets the per-line
-entries.  The fringe-rate cells are institutional constants that ship with the
-template and are never touched.  Every subtotal, total, salary, fringe, tuition,
-F&A, and roll-up formula is left untouched so Excel recomputes the correct
-combined budget on open.
+formula.  Only genuine *user-input* cells are copied, and every subtotal, total,
+salary, fringe, tuition, F&A, and roll-up formula is left untouched so Excel
+recomputes the correct combined budget on open.  The fringe-rate cells are
+institutional constants that ship with the template and are never touched.
 
-Line items are *concatenated* into the template's fixed sections.  If a section
-has more line items than rows, the overflow is dropped and reported so the
-caller can raise a prominent warning.
+How each section is combined:
+
+* **Concatenated** (one row per distinct entry): senior personnel, other
+  professionals, admin, other personnel, equipment, subcontracts, and
+  participant-support blocks.
+* **Consolidated by base salary** (one row per distinct base; headcount x months
+  summed per period, which is cost-exact because the salary formulas are linear
+  in headcount x months): post-docs (<=3 rows) and GRAs (<=4 rows).
+* **Collapsed to a single row**: undergraduate researchers.
+* **Consolidated per period into one domestic + one foreign summary row**:
+  travel (reproduces each period's subtotal exactly).
+* **Grouped by description and summed**: supplies.
+
+If a section still has more distinct entries than it has rows, the overflow is
+dropped and reported so the caller can raise a prominent warning.
 """
 
 from __future__ import annotations
 
 import os
 import warnings as _warnings
+from collections import OrderedDict
 from dataclasses import dataclass
 from typing import List, Optional, Sequence, Tuple, Union
 
@@ -139,22 +147,6 @@ def _resolve_sheet(wb, name: str):
 
 # -- Personnel ---------------------------------------------------------------
 
-# (label, personnel rows, name_in_b).  ``name_in_b`` marks groups whose column B
-# holds an actual person's name (the senior-personnel section); elsewhere column
-# B is a fixed role label ("Post Doc(s)", "GRA(s)", ...) that ships with the
-# template and is left alone.  The fringe rows (44-69) are never touched: their
-# names and amounts are formulas, and the rates are the institution's standard
-# rates that ship with the template.
-PERSONNEL_GROUPS = [
-    ("Senior Personnel", X.SENIOR_ROWS, True),
-    ("Post Docs", X.POSTDOC_ROWS, False),
-    ("Other Professionals", X.OTHER_PROF_ROWS, False),
-    ("Graduate Research Assistants", X.GRA_ROWS, False),
-    ("Undergraduate Researchers", [X.UNDERGRAD_ROW], False),
-    ("Admin/Clerical", [X.ADMIN_ROW], False),
-    ("Other Personnel", X.OTHER_STAFF_ROWS, False),
-]
-
 # User-input columns feeding the salary formulas, per the template:
 #   A = apply-annual-raise flag ("Yes"/"No")
 #   C = UT / JFO / GRA (selects the inflation rate)
@@ -166,17 +158,41 @@ PERSONNEL_INPUT_COLS = ["A", "C", "D", "E", "F", "G", "H", "I", "J"]
 SENIOR_TENURE_COLS = ["S", "T", "U"]
 PERSON_MONTH_COLS = ["F", "G", "H", "I", "J"]
 
+# Groups that CONCATENATE -- each entry is a distinct named person kept on its
+# own row.  ``name_in_b`` marks the senior section, whose column B holds a real
+# name (elsewhere B is a fixed role label that ships with the template).
+CONCAT_GROUPS = [
+    ("Senior Personnel", X.SENIOR_ROWS, True),
+    ("Other Professionals", X.OTHER_PROF_ROWS, False),
+    ("Admin/Clerical", [X.ADMIN_ROW], False),
+    ("Other Personnel", X.OTHER_STAFF_ROWS, False),
+]
 
-def _merge_personnel(ws_t, value_sheets) -> List[RowOverflow]:
+# Groups that CONSOLIDATE.  Postdocs and GRAs are grouped by base salary (one
+# row per distinct base); undergraduates collapse to a single row.  Because the
+# salary formulas are linear in headcount x months, consolidating with E=1 and
+# months = sum(headcount_i x months_i) reproduces the cost exactly.
+# (label, rows, collapse_all)
+CONSOLIDATE_GROUPS = [
+    ("Post Docs", X.POSTDOC_ROWS, False),
+    ("Graduate Research Assistants", X.GRA_ROWS, False),
+    ("Undergraduate Researchers", [X.UNDERGRAD_ROW], True),
+]
+
+# Columns cleared/written for a consolidated line.  Column B (the role label)
+# and the fringe rows are left untouched.
+CONSOLIDATE_COLS = ["A", "C", "D", "E"] + PERSON_MONTH_COLS
+
+
+def _concat_personnel(ws_t, value_sheets) -> List[RowOverflow]:
+    """Stack distinct named personnel (senior, other prof, admin, other)."""
     overflows = []
-    for label, pers_rows, name_in_b in PERSONNEL_GROUPS:
+    for label, pers_rows, name_in_b in CONCAT_GROUPS:
         pers_rows = list(pers_rows)
         cols = list(PERSONNEL_INPUT_COLS)
         if name_in_b:
             cols = ["B"] + cols + SENIOR_TENURE_COLS
 
-        # An entry is "real" if it carries a base salary, any person-months, or
-        # any cached period salary.
         entries = []
         for vs in value_sheets:
             for prow in pers_rows:
@@ -189,8 +205,6 @@ def _merge_personnel(ws_t, value_sheets) -> List[RowOverflow]:
                 entry["_name"] = vs[f"B{prow}"].value
                 entries.append(entry)
 
-        # Clear each slot's input columns, then stack the entries (formula-safe
-        # throughout: _set never writes into a formula cell).
         for prow in pers_rows:
             for c in cols:
                 _set(ws_t, prow, c, None)
@@ -202,11 +216,107 @@ def _merge_personnel(ws_t, value_sheets) -> List[RowOverflow]:
                 _set(ws_t, prow, c, entry[c])
 
         if len(entries) > capacity:
-            dropped = []
-            for i, e in enumerate(entries[capacity:]):
-                nm = e.get("_name")
-                dropped.append(str(nm) if _present_name(nm) else f"{label} entry {capacity + i + 1}")
+            dropped = [str(e["_name"]) if _present_name(e["_name"])
+                       else f"{label} entry {capacity + i + 1}"
+                       for i, e in enumerate(entries[capacity:])]
             overflows.append(RowOverflow(label, capacity, len(entries), dropped))
+    return overflows
+
+
+def _collect_consolidatable(value_sheets, rows):
+    """Return the funded entries in ``rows`` as dicts of base/headcount/months."""
+    entries = []
+    for vs in value_sheets:
+        for r in rows:
+            base = _num(vs[f"D{r}"].value)
+            head = _num(vs[f"E{r}"].value)
+            months = {c: _num(vs[f"{c}{r}"].value) for c in PERSON_MONTH_COLS}
+            # Funded only if base, headcount, and at least one month are set --
+            # matching the template's cost formula (base x headcount x months).
+            if base > 0 and head > 0 and any(months.values()):
+                entries.append({"D": base, "E": head, "months": months,
+                                "A": vs[f"A{r}"].value, "C": vs[f"C{r}"].value})
+    return entries
+
+
+def _agg_months(group, weight_by_base=False):
+    out = {}
+    for c in PERSON_MONTH_COLS:
+        out[c] = sum((e["D"] if weight_by_base else 1.0) * e["E"] * e["months"][c]
+                     for e in group)
+    return out
+
+
+def _escalation_key(e):
+    """Group only entries that share a base salary AND the same escalation
+    inputs -- the personnel type in column C (UT/JFO/GRA selects the inflation
+    rate) and the raise flag in column A.  Two $5,000 post-docs, one UT and one
+    JFO, escalate at different rates, so merging them onto one line would make
+    years 2-5 wrong; keying on all three keeps every consolidated line
+    cost-exact in every period."""
+    return (round(_num(e["D"]), 2), str(e["C"]), str(e["A"]))
+
+
+def _group_by_base(entries):
+    """One consolidated line per (base salary, type, raise flag); largest base
+    first."""
+    groups = OrderedDict()
+    for e in entries:
+        groups.setdefault(_escalation_key(e), []).append(e)
+    lines = []
+    for key in sorted(groups, key=lambda k: k[0], reverse=True):
+        grp = groups[key]
+        lines.append({"D": grp[0]["D"], "E": 1, "A": grp[0]["A"], "C": grp[0]["C"],
+                      "months": _agg_months(grp)})
+    return lines
+
+
+def _collapse_all(entries):
+    """Collapse every entry into a single line.
+
+    If all entries share a base salary the base is kept and months are summed;
+    otherwise the line is normalised to base=1 with months = sum(base x
+    headcount x months), which is still cost-exact when the escalation rate is
+    uniform across the entries (true for undergraduates, all UT-rate)."""
+    bases = {round(e["D"], 2) for e in entries}
+    first = entries[0]
+    if len(bases) == 1:
+        line = {"D": first["D"], "E": 1, "months": _agg_months(entries)}
+    else:
+        line = {"D": 1, "E": 1, "months": _agg_months(entries, weight_by_base=True)}
+    line["A"], line["C"] = first["A"], first["C"]
+    return [line]
+
+
+def _consolidate_personnel(ws_t, value_sheets) -> List[RowOverflow]:
+    overflows = []
+    for label, rows, collapse_all in CONSOLIDATE_GROUPS:
+        rows = list(rows)
+        entries = _collect_consolidatable(value_sheets, rows)
+
+        # Clear the section's input columns (formula-safe; B/role labels and the
+        # fringe rows are left untouched).
+        for r in rows:
+            for c in CONSOLIDATE_COLS:
+                _set(ws_t, r, c, None)
+        if not entries:
+            continue
+
+        lines = _collapse_all(entries) if collapse_all else _group_by_base(entries)
+
+        capacity = len(rows)
+        for k, line in enumerate(lines[:capacity]):
+            r = rows[k]
+            _set(ws_t, r, "A", line["A"])
+            _set(ws_t, r, "C", line["C"])
+            _set(ws_t, r, "D", line["D"])
+            _set(ws_t, r, "E", line["E"])
+            for c in PERSON_MONTH_COLS:
+                _set(ws_t, r, c, line["months"][c] or None)
+
+        if len(lines) > capacity:
+            dropped = [f"{label} @ base ${l['D']:,.2f}" for l in lines[capacity:]]
+            overflows.append(RowOverflow(label, capacity, len(lines), dropped))
     return overflows
 
 
@@ -269,28 +379,96 @@ def _main_sheet_specs() -> List[StackSpec]:
     ]
 
 
-def _travel_specs(sheet: str) -> List[StackSpec]:
-    """TRAVEL: 5 period blocks, each with 10 domestic + 5 foreign entry rows."""
-    cols = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "L"]
-    cells = [(0, c) for c in cols]
-    money = [(0, c) for c in ["D", "E", "F", "G", "H", "I", "J"]]
-    specs = []
-    for p in range(5):
-        base = 1 + p * 22
-        dom = list(range(base + 3, base + 13))       # 10 domestic rows
-        foreign = list(range(base + 15, base + 20))   # 5 foreign rows
-        specs.append(StackSpec(sheet, dom, cells, money,
-                               f"TRAVEL Period {p + 1} Domestic", name_cell=(0, "A")))
-        specs.append(StackSpec(sheet, foreign, cells, money,
-                               f"TRAVEL Period {p + 1} Foreign", name_cell=(0, "A")))
-    return specs
+# TRAVEL: 5 period blocks (22 rows each) with 10 domestic + 5 foreign rows.
+TRAVEL_INPUT_COLS = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "L"]
+TRAVEL_BLOCKS = [(1 + p * 22, p + 1) for p in range(5)]
 
 
-def _supplies_specs(sheet: str) -> List[StackSpec]:
-    cols = ["A", "B", "C", "D", "E", "F"]            # A=desc, B-F=periods
-    return [StackSpec(sheet, list(range(3, 38)), [(0, c) for c in cols],
-                      [(0, c) for c in ["B", "C", "D", "E", "F"]],
-                      "Supplies", name_cell=(0, "A"))]
+def _consolidate_travel(ws_t, value_sheets) -> None:
+    """Collapse every trip in a period/kind into one summary row.
+
+    The per-trip and subtotal formulas compute
+        cost = travelers*(regfee+airfare+additional) + travelers*days*(lodging+perdiem)
+    so a single row with days=1, travelers=1 and the pre-multiplied per-column
+    sums reproduces the subtotal exactly.  days>0 is required or the sheet
+    reports "# Days Missing" and the total breaks."""
+    for base, period in TRAVEL_BLOCKS:
+        for kind, first_row, span in (("domestic", base + 3, 10),
+                                      ("foreign", base + 15, 5)):
+            rows = list(range(first_row, first_row + span))
+            reg = air = add = lodg = perd = 0.0
+            ntrips = 0
+            for vs in value_sheets:
+                for r in rows:
+                    F = _num(vs[f"F{r}"].value); G = _num(vs[f"G{r}"].value)
+                    H = _num(vs[f"H{r}"].value); I = _num(vs[f"I{r}"].value)
+                    J = _num(vs[f"J{r}"].value)
+                    if F + G + H + I + J <= 0:
+                        continue
+                    D = _num(vs[f"D{r}"].value); E = _num(vs[f"E{r}"].value)
+                    ntrips += 1
+                    reg += F * E; air += G * E; add += H * E
+                    lodg += I * D * E; perd += J * D * E
+
+            for r in rows:                       # clear all trip rows (formula-safe)
+                for c in TRAVEL_INPUT_COLS:
+                    _set(ws_t, r, c, None)
+
+            if reg + air + add + lodg + perd <= 0:
+                continue
+            r = first_row
+            _set(ws_t, r, "A", f"Merged {kind} travel ({ntrips} trip(s))")
+            _set(ws_t, r, "C", "Various")
+            _set(ws_t, r, "D", 1)   # days   (>0 so the row's total is not blocked)
+            _set(ws_t, r, "E", 1)   # travelers
+            _set(ws_t, r, "F", reg or None)
+            _set(ws_t, r, "G", air or None)
+            _set(ws_t, r, "H", add or None)
+            _set(ws_t, r, "I", lodg or None)
+            _set(ws_t, r, "J", perd or None)
+
+
+# SUPPLIES: entry rows 3-37 (A=description, B-F = per-period dollar amounts).
+SUPPLIES_ROWS = list(range(3, 38))
+SUPPLIES_PERIOD_COLS = ["B", "C", "D", "E", "F"]
+
+
+def _consolidate_supplies(ws_t, value_sheets) -> Optional[RowOverflow]:
+    """Group supply lines by description and sum the per-period amounts.
+
+    Supply amounts are plain dollars, so summing is exact.  Blank descriptions
+    all collapse into a single line; distinct descriptions stay separate."""
+    groups = OrderedDict()
+    for vs in value_sheets:
+        for r in SUPPLIES_ROWS:
+            amounts = {c: _num(vs[f"{c}{r}"].value) for c in SUPPLIES_PERIOD_COLS}
+            if not any(amounts.values()):
+                continue
+            desc = vs[f"A{r}"].value
+            key = str(desc).strip().lower() if _present_name(desc) else ""
+            if key not in groups:
+                groups[key] = {"A": desc if _present_name(desc) else None,
+                               "sums": {c: 0.0 for c in SUPPLIES_PERIOD_COLS}}
+            for c in SUPPLIES_PERIOD_COLS:
+                groups[key]["sums"][c] += amounts[c]
+
+    lines = list(groups.values())
+    for r in SUPPLIES_ROWS:                      # clear (formula-safe)
+        for c in ["A"] + SUPPLIES_PERIOD_COLS:
+            _set(ws_t, r, c, None)
+
+    capacity = len(SUPPLIES_ROWS)
+    for k, line in enumerate(lines[:capacity]):
+        r = SUPPLIES_ROWS[k]
+        if line["A"] is not None:
+            _set(ws_t, r, "A", line["A"])
+        for c in SUPPLIES_PERIOD_COLS:
+            _set(ws_t, r, c, line["sums"][c] or None)
+
+    if len(lines) > capacity:
+        dropped = [str(l["A"] or "(unlabeled)") for l in lines[capacity:]]
+        return RowOverflow("Supplies", capacity, len(lines), dropped)
+    return None
 
 
 def _subcontracts_specs(sheet: str) -> List[StackSpec]:
@@ -443,7 +621,8 @@ def write_merged_workbook(
     issues: List[MergeIssue] = []
 
     # --- Main sheet: personnel, equipment, manual leaves, tuition, metadata
-    issues.extend(_merge_personnel(ws_t, main_values))
+    issues.extend(_concat_personnel(ws_t, main_values))       # named people
+    issues.extend(_consolidate_personnel(ws_t, main_values))  # postdoc/GRA/undergrad
     for spec in _main_sheet_specs():
         of = _stack(ws_t, main_values, spec)
         if of:
@@ -454,30 +633,33 @@ def write_merged_workbook(
     _set_metadata(ws_t, main_values, len(input_paths))
 
     # --- Detail sheets (so the main-sheet formula leaves recompute) --------
-    detail_builders = [
-        ("TRAVEL", _travel_specs),
-        ("SUPPLIES", _supplies_specs),
-        ("SUBCONTRACTS", _subcontracts_specs),
-    ]
-    for sheet_name, builder in detail_builders:
-        ws_detail = _resolve_sheet(template_wb, sheet_name)
-        if ws_detail is None:
-            continue
-        detail_values = [vs for vs in
-                         (_resolve_sheet(wb, sheet_name) for wb in value_wbs)
-                         if vs is not None]
-        for spec in builder(ws_detail.title):
-            of = _stack(ws_detail, detail_values, spec)
+    # Travel and supplies are consolidated; subcontracts and participant support
+    # are concatenated (distinct entities).
+    def detail_values(sheet_name):
+        return [vs for vs in (_resolve_sheet(wb, sheet_name) for wb in value_wbs)
+                if vs is not None]
+
+    ws_travel = _resolve_sheet(template_wb, "TRAVEL")
+    if ws_travel is not None:
+        _consolidate_travel(ws_travel, detail_values("TRAVEL"))
+
+    ws_supplies = _resolve_sheet(template_wb, "SUPPLIES")
+    if ws_supplies is not None:
+        of = _consolidate_supplies(ws_supplies, detail_values("SUPPLIES"))
+        if of:
+            issues.append(of)
+
+    ws_sub = _resolve_sheet(template_wb, "SUBCONTRACTS")
+    if ws_sub is not None:
+        for spec in _subcontracts_specs(ws_sub.title):
+            of = _stack(ws_sub, detail_values("SUBCONTRACTS"), spec)
             if of:
                 issues.append(of)
 
     ws_part = _resolve_sheet(template_wb, "PARTICIPANT SUPPORT COSTS")
     if ws_part is not None:
-        part_values = [vs for vs in
-                       (_resolve_sheet(wb, "PARTICIPANT SUPPORT COSTS") for wb in value_wbs)
-                       if vs is not None]
         for spec in _participant_specs(ws_part.title, ws_part):
-            of = _stack(ws_part, part_values, spec)
+            of = _stack(ws_part, detail_values("PARTICIPANT SUPPORT COSTS"), spec)
             if of:
                 issues.append(of)
 
