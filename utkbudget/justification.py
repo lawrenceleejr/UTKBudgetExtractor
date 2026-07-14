@@ -19,6 +19,7 @@ from typing import List, Sequence, Tuple
 
 from .extractor import PERIOD_WORDS
 from .provenance import provenance_comment
+from .texdefs import escape_tex
 
 
 def _m(prefix: str, field: str) -> str:
@@ -92,7 +93,12 @@ def _summary_table(prefix: str) -> str:
 
 
 def render_section(prefix: str, title: str, is_sum: bool = False) -> str:
-    """Return the LaTeX for one budget's justification section."""
+    """Return the LaTeX for one budget's justification section.
+
+    ``title`` is human text (typically an input filename or program name) and is
+    LaTeX-escaped before use, so underscores and other special characters are
+    rendered literally rather than breaking compilation."""
+    title = escape_tex(title)
     if is_sum:
         opener = (
             f"This section justifies the {title} request, which is the sum of the "
@@ -259,11 +265,13 @@ def build_document(
     """Assemble a complete justification document.
 
     ``defs_inputs`` are relative paths to ``\\input`` (the generated defs
-    files).  ``sections`` is a list of ``(prefix, heading, is_sum)``.
+    files).  ``sections`` is a list of ``(prefix, heading, is_sum)``.  ``title``
+    is human text and is LaTeX-escaped here; ``intro`` is treated as authored
+    LaTeX and is emitted verbatim (callers must escape any names they weave in).
     """
     today = _dt.date.today()
     out: List[str] = [provenance_comment(), PREAMBLE]
-    out.append(f"\\title{{{title}}}")
+    out.append(f"\\title{{{escape_tex(title)}}}")
     out.append(f"\\date{{{today:%B} {today.day}, {today:%Y}}}")
     out.append("\\begin{document}")
     out.append("\\maketitle")

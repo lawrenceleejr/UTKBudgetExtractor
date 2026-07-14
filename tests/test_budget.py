@@ -500,6 +500,53 @@ class TexTests(unittest.TestCase):
         undefined = used - defined
         self.assertEqual(undefined, set(), f"undefined macros: {undefined}")
 
+    def test_underscores_escaped_in_titles_and_prose(self):
+        from utkbudget.justification import render_section
+        # A filename-derived title with an underscore must be escaped everywhere
+        # it appears as text (section heading + prose), or LaTeX won't compile.
+        section = render_section("Test", "PI_Smith_2025", is_sum=False)
+        self.assertIn(r"\section{PI\_Smith\_2025}", section)
+        self.assertNotIn("PI_Smith", section)   # no raw underscore survives
+        # Document title is escaped too.
+        doc = build_document("Grant_Budget_A", [], [])
+        self.assertIn(r"\title{Grant\_Budget\_A}", doc)
+
+
+class CliJustificationTests(unittest.TestCase):
+    def test_each_pi_gets_standalone_justification(self):
+        from utkbudget.cli import run
+        tmp = tempfile.mkdtemp()
+        indir = os.path.join(tmp, "in")
+        os.makedirs(indir)
+        make_real_input(os.path.join(indir, "PI_Smith.xlsx"),
+                        seniors=[("Smith", 100000, 2)])
+        make_real_input(os.path.join(indir, "PI_Jones.xlsx"),
+                        seniors=[("Jones", 90000, 1)])
+        outdir = os.path.join(tmp, "out")
+        run(indir, outdir)
+
+        smith = os.path.join(outdir, "PI_Smith_justification.tex")
+        jones = os.path.join(outdir, "PI_Jones_justification.tex")
+        combined = os.path.join(outdir, "justification.tex")
+        for p in (smith, jones, combined):
+            self.assertTrue(os.path.exists(p), f"missing {p}")
+
+        with open(smith) as fh:
+            smith_text = fh.read()
+        # Standalone: this PI's section only, no other PI, no combined section.
+        self.assertIn(r"\section{PI\_Smith}", smith_text)     # escaped underscore
+        self.assertNotIn("Jones", smith_text)
+        self.assertNotIn("Combined", smith_text)
+        # Each PI \inputs only its own defs file.
+        self.assertIn(r"\input{PI_Smith}", smith_text)
+        self.assertNotIn("PI_Jones", smith_text)
+
+        # The combined justification carries the summed section, not the PIs.
+        with open(combined) as fh:
+            combined_text = fh.read()
+        self.assertIn("Combined", combined_text)
+        self.assertNotIn(r"\section{PI\_Smith}", combined_text)
+
 
 class ProvenanceTests(unittest.TestCase):
     def test_defs_header_has_timestamp_and_commit(self):

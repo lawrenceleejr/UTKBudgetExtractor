@@ -26,7 +26,7 @@ from .extractor import Budget, extract_budget
 from .justification import write_document
 from .merge import (MergeIssue, RowOverflow, ValueConflict, merge_budgets,
                     write_merged_workbook)
-from .texdefs import tex_prefix, write_defs
+from .texdefs import escape_tex, tex_prefix, write_defs
 
 GRAND_PREFIX = "Combined"
 
@@ -114,9 +114,13 @@ def process_group(name: str, files: List[str], out_dir: str,
     """Process one group of spreadsheets into ``out_dir``.
 
     ``group_prefix`` is the LaTeX macro prefix for the merged total.
-    ``file_stub`` is the filename stem for the merged/justification outputs;
-    when ``None`` the merged products are simply ``merged.xlsx`` /
-    ``merged.tex`` / ``justification.tex`` (used for a single flat folder).
+    ``file_stub`` is the filename stem for the merged/combined outputs; when
+    ``None`` they are simply ``merged.xlsx`` / ``merged.tex`` /
+    ``justification.tex`` (used for a single flat folder).
+
+    Each input file gets its OWN standalone ``<file>_justification.tex`` (only
+    that budget -- so a single PI can compile and submit theirs independently).
+    The combined-total justification is written separately.
 
     Returns ``(merged_budget, group_merged_tex_path, budgets)``.
     """
@@ -133,8 +137,6 @@ def process_group(name: str, files: List[str], out_dir: str,
 
     used_prefixes = {group_prefix}
     budgets: List[Budget] = []
-    defs_inputs: List[str] = []          # relative \input paths for justification
-    sections: List[Tuple[str, str, bool]] = []
 
     for path in files:
         base = os.path.splitext(os.path.basename(path))[0]
@@ -145,8 +147,16 @@ def process_group(name: str, files: List[str], out_dir: str,
 
         tex_name = f"{base}.tex"
         write_defs(budget, prefix, os.path.join(out_dir, tex_name))
-        defs_inputs.append(tex_name)
-        sections.append((prefix, base, False))
+
+        # Standalone justification for this single budget (no merged section).
+        write_document(
+            os.path.join(out_dir, f"{base}_justification.tex"),
+            title=f"Budget Justification --- {base}",
+            defs_inputs=[tex_name],
+            sections=[(prefix, base, False)],
+            intro=("This document justifies the funds requested from the U.S. "
+                   f"Department of Energy for the {escape_tex(base)} budget."),
+        )
 
     # Merged budget definitions (summed field-by-field, drives the .tex).
     merged = merge_budgets(budgets, source=f"{name} (merged)")
@@ -160,20 +170,17 @@ def process_group(name: str, files: List[str], out_dir: str,
 
     write_defs(merged, group_prefix, os.path.join(out_dir, merged_tex_name),
                header_note=f"Merged total for {name}")
-    defs_inputs.append(merged_tex_name)
-    sections.append((group_prefix, f"{name} (Combined)", True))
 
+    # Separate combined-total justification (the sum only).
     just_path = os.path.join(out_dir, just_name)
     write_document(
         just_path,
-        title=f"Budget Justification --- {name}",
-        defs_inputs=defs_inputs,
-        sections=sections,
-        intro=(
-            "This document justifies the funds requested from the U.S. Department "
-            f"of Energy for the {name} budget. A justification is provided for each "
-            "contributing budget, followed by a justification of the combined total."
-        ),
+        title=f"Budget Justification --- {name} (Combined)",
+        defs_inputs=[merged_tex_name],
+        sections=[(group_prefix, f"{name} (Combined)", True)],
+        intro=("This document justifies the combined budget -- the sum of the "
+               f"{len(files)} contributing budget(s) in {escape_tex(name)} -- "
+               "requested from the U.S. Department of Energy."),
     )
     print(f"  wrote {os.path.relpath(just_path)}")
 

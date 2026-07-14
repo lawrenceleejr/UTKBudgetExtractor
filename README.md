@@ -11,12 +11,14 @@ and it produces, for **every** input file:
 1. **A LaTeX definitions file** named after the input (`PI_Smith.xlsx` →
    `PI_Smith.tex`) containing every labelled number as a `\newcommand`, ready to
    `\input` into a proposal or justification.
-2. **A merged Excel workbook** (`merged.xlsx`) **in the same format as the
+2. **A standalone DOE budget justification for that input**
+   (`PI_Smith_justification.tex`) — only that budget, so a single PI can compile
+   and submit their own — with travel called out in detail.
+3. **A merged Excel workbook** (`merged.xlsx`) **in the same format as the
    inputs**, combining all of the budgets (see [Merging](#how-the-merge-works)).
-3. **Merged LaTeX definitions** (`merged.tex`) for the combined budget.
-4. **A DOE budget-justification document** (`justification.tex`) with a written
-   justification for each input file followed by a justification of the combined
-   sum, with travel called out in detail.
+4. **Merged LaTeX definitions** (`merged.tex`) for the combined budget.
+5. **A separate combined-total justification** (`justification.tex`) for the
+   summed budget.
 
 ## Install
 
@@ -45,11 +47,13 @@ produces
 
 ```
 output/
-├── PI_Smith.tex          # \newcommand defs for Smith
-├── PI_Jones.tex          # \newcommand defs for Jones
-├── merged.xlsx           # Smith + Jones, summed
-├── merged.tex            # \newcommand defs for the sum
-└── justification.tex     # justification per file + the combined sum
+├── PI_Smith.tex                 # \newcommand defs for Smith
+├── PI_Smith_justification.tex   # standalone justification, Smith only
+├── PI_Jones.tex                 # \newcommand defs for Jones
+├── PI_Jones_justification.tex   # standalone justification, Jones only
+├── merged.xlsx                  # Smith + Jones, summed
+├── merged.tex                   # \newcommand defs for the sum
+└── justification.tex            # combined-total justification (the sum)
 ```
 
 ### Folder with program sub-folders
@@ -75,10 +79,12 @@ produces
 output/
 ├── ProgramOne/
 │   ├── PI_Smith.tex
+│   ├── PI_Smith_justification.tex     # standalone, Smith only
 │   ├── PI_Jones.tex
+│   ├── PI_Jones_justification.tex     # standalone, Jones only
 │   ├── ProgramOne_merged.xlsx
 │   ├── ProgramOne_merged.tex
-│   └── ProgramOne_justification.tex   # per file + program sum
+│   └── ProgramOne_justification.tex   # Program 1 combined total
 ├── ProgramTwo/ ...
 ├── ProgramThree/ ...
 ├── merged.xlsx          # fully merged across every program
