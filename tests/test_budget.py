@@ -494,7 +494,8 @@ class TexTests(unittest.TestCase):
         with open(defs) as fh:
             defs_text = fh.read()
         defined = set(re.findall(r"\\newcommand\{\\([A-Za-z]+)\}", defs_text))
-        doc = build_document("T", ["b.tex"], [("Test", "Test Budget", False)])
+        doc = build_document("T", ["b.tex"],
+                             [("Test", b, "Test Budget", False, True)])
         body = re.sub(r"\\input\{[^}]+\}", "", doc)
         used = set(re.findall(r"\\([A-Za-z]+)\{\}", body))
         undefined = used - defined
@@ -502,9 +503,9 @@ class TexTests(unittest.TestCase):
 
     def test_underscores_escaped_in_titles_and_prose(self):
         from utkbudget.justification import render_section
-        # A filename-derived title with an underscore must be escaped everywhere
-        # it appears as text (section heading + prose), or LaTeX won't compile.
-        section = render_section("Test", "PI_Smith_2025", is_sum=False)
+        # A section heading with an underscore must be escaped, or LaTeX won't
+        # compile.
+        section = render_section("Test", heading="PI_Smith_2025")
         self.assertIn(r"\section{PI\_Smith\_2025}", section)
         self.assertNotIn("PI_Smith", section)   # no raw underscore survives
         # Document title is escaped too.

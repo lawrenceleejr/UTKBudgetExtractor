@@ -40,6 +40,7 @@ from dataclasses import dataclass
 from typing import List, Optional, Sequence, Tuple, Union
 
 from openpyxl import load_workbook
+from openpyxl.cell.cell import MergedCell
 
 from . import extractor as X
 from .extractor import Budget, Field
@@ -123,13 +124,16 @@ def _is_formula(cell) -> bool:
 
 
 def _set(ws, row: int, col: str, value) -> bool:
-    """Set ``ws[col][row]`` to ``value`` -- unless it holds a formula.
+    """Set ``ws[col][row]`` to ``value`` -- unless it holds a formula or is the
+    read-only member of a merged range.
 
-    Returns ``True`` if the cell was written.  This is the single guarantee
-    that no formula is ever clobbered by the merge.
+    Returns ``True`` if the cell was written.  This is the single guarantee that
+    the merge never clobbers a formula, and never crashes on a merged cell (only
+    the top-left anchor of a merged range is writable; the rest are read-only
+    ``MergedCell`` proxies that carry no independent value).
     """
     cell = ws[f"{col}{row}"]
-    if _is_formula(cell):
+    if isinstance(cell, MergedCell) or _is_formula(cell):
         return False
     cell.value = value
     return True

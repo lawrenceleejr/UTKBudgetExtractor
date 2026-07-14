@@ -156,7 +156,7 @@ def process_group(name: str, files: List[str], out_dir: str,
             os.path.join(out_dir, f"{base}_justification.tex"),
             title="Budget Justification",
             defs_inputs=[],
-            sections=[("Budget", None, False)],
+            sections=[("Budget", budget, None, False, True)],
             intro=("This document justifies the funds requested from the U.S. "
                    "Department of Energy for the proposed research."),
             defs_inline=render_defs(budget, "Budget", bare=True),
@@ -181,7 +181,7 @@ def process_group(name: str, files: List[str], out_dir: str,
         just_path,
         title=f"Budget Justification --- {name} (Combined)",
         defs_inputs=[merged_tex_name],
-        sections=[(group_prefix, None, True)],
+        sections=[(group_prefix, merged, None, True, False)],
         intro=("This document justifies the combined budget -- the sum of the "
                f"{len(files)} contributing budget(s) in {escape_tex(name)} -- "
                "requested from the U.S. Department of Energy."),
@@ -240,7 +240,7 @@ def run(input_dir: str, output_dir: str) -> None:
         # Relative path from output_dir for the master document's \input
         rel = os.path.relpath(merged_tex_path, output_dir)
         master_defs_inputs.append(rel)
-        master_sections.append((gprefix, name, False))
+        master_sections.append((gprefix, merged, name, False, False))
 
     # ---- Fully merged version across every program ---------------------
     print(f"\n=== Fully merged ({len(all_files)} file(s)) -> {output_dir} ===")
@@ -254,7 +254,7 @@ def run(input_dir: str, output_dir: str) -> None:
     write_defs(grand, GRAND_PREFIX, os.path.join(output_dir, "merged.tex"),
                header_note="Fully merged total across all programs")
     master_defs_inputs.append("merged.tex")
-    master_sections.append((GRAND_PREFIX, "All Programs (Combined)", True))
+    master_sections.append((GRAND_PREFIX, grand, "All Programs (Combined)", True, False))
 
     master_just = os.path.join(output_dir, "justification.tex")
     write_document(
