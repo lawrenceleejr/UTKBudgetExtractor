@@ -192,12 +192,19 @@ def extract_budget(path: str) -> Budget:
     another engine that evaluates formulas) for the totals to be populated.
     """
     wb = load_workbook(filename=path, data_only=True)
-    if SHEET_NAME not in wb.sheetnames:
+    ws = None
+    if SHEET_NAME in wb.sheetnames:
+        ws = wb[SHEET_NAME]
+    else:  # tolerate case / trailing-space differences (e.g. after a re-save)
+        for sn in wb.sheetnames:
+            if sn.strip().upper() == SHEET_NAME.strip().upper():
+                ws = wb[sn]
+                break
+    if ws is None:
         raise ValueError(
             f"{path!r}: expected a worksheet named {SHEET_NAME!r}; "
             f"found {wb.sheetnames}"
         )
-    ws = wb[SHEET_NAME]
     b = Budget(source=path)
 
     # -- Metadata ---------------------------------------------------------
@@ -212,12 +219,15 @@ def extract_budget(path: str) -> Budget:
         return chr(ord("A") + i)
 
     # -- Section A: Senior Personnel --------------------------------------
+    person_month_cols = ["F", "G", "H", "I", "J"]  # person-months, periods 1-5
     for i, row in enumerate(SENIOR_ROWS):
         b.add(f"Senior{abc(i)}Name", ws[f"B{row}"].value, KIND_TEXT)
         b.add(f"Senior{abc(i)}Type", ws[f"C{row}"].value, KIND_TEXT)  # UT / JFO
         b.add(f"Senior{abc(i)}BaseAnnual", ws[f"D{row}"].value, KIND_MONEY)
         b.add(f"Senior{abc(i)}ApptType", ws[f"E{row}"].value, KIND_TEXT)
         b.add(f"Senior{abc(i)}PersonMonths", ws[f"F{row}"].value, KIND_MONTHS)
+        for word, col in zip(PERIOD_WORDS, person_month_cols):
+            b.add(f"Senior{abc(i)}MonthsYear{word}", ws[f"{col}{row}"].value, KIND_MONTHS)
         b.add_line(f"Senior{abc(i)}", ws, row, KIND_MONEY)
     b.add_line("SeniorSubtotal", ws, SENIOR_SUBTOTAL_ROW, KIND_MONEY)
 

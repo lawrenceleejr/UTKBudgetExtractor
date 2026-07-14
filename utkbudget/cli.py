@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import textwrap
 from typing import List, Tuple
 
 from .extractor import Budget, extract_budget
@@ -34,39 +35,46 @@ GRAND_PREFIX = "Combined"
 def warn_merge_issues(context: str, xlsx_path: str,
                       issues: List[MergeIssue]) -> None:
     """Print an impossible-to-miss warning for merge problems (a section ran
-    out of rows, or the inputs disagree on a workbook-wide value)."""
+    out of rows, or the inputs disagree on a workbook-wide value).
+
+    Long messages are WRAPPED, never truncated, so the full warning is always
+    visible in the terminal."""
     width = 78
     inner = width - 8  # room inside "!!! ... !!!"
 
-    def row(text: str = "", center: bool = False) -> str:
-        text = text if len(text) <= inner else text[: inner - 3] + "..."
-        body = text.center(inner) if center else text.ljust(inner)
-        return f"!!! {body} !!!"
+    def rows(text: str = "", center: bool = False, indent: str = "") -> list:
+        # Wrap to the box width so nothing is cut off; blank text -> one blank row.
+        segments = textwrap.wrap(text, inner, subsequent_indent=indent) if text else [""]
+        out = []
+        for seg in segments:
+            body = seg.center(inner) if center else seg.ljust(inner)
+            out.append(f"!!! {body} !!!")
+        return out
 
     overflows = [i for i in issues if isinstance(i, RowOverflow)]
     conflicts = [i for i in issues if isinstance(i, ValueConflict)]
 
     bar = "!" * width
-    lines = ["", bar, bar,
-             row("PROBLEMS WHILE MERGING -- CHECK THE MERGED SPREADSHEET", center=True),
-             bar,
-             row(f"Context : {context}"),
-             row(f"Workbook: {os.path.relpath(xlsx_path)}")]
+    lines = ["", bar, bar]
+    lines += rows("PROBLEMS WHILE MERGING -- CHECK THE MERGED SPREADSHEET", center=True)
+    lines += [bar]
+    lines += rows(f"Context : {context}")
+    lines += rows(f"Workbook: {os.path.relpath(xlsx_path)}")
     if overflows:
-        lines += [row(), row("RAN OUT OF ROWS (overflow entries were DROPPED):")]
+        lines += rows() + rows("RAN OUT OF ROWS (overflow entries were DROPPED):")
         for of in overflows:
             n = of.needed - of.capacity
-            lines.append(row(f"  Section '{of.section}' has {of.capacity} row(s) "
-                             f"but the merge needs {of.needed}."))
-            lines.append(row(f"    -> {n} DROPPED: {', '.join(of.dropped)}"))
-        lines += [row("  Add rows to those template sections, or split the "
-                      "proposal, then re-run.")]
+            lines += rows(f"  Section '{of.section}' has {of.capacity} row(s) "
+                          f"but the merge needs {of.needed}.", indent="    ")
+            lines += rows(f"    -> {n} DROPPED: {', '.join(of.dropped)}", indent="       ")
+        lines += rows("  Add rows to those template sections, or split the "
+                      "proposal, then re-run.", indent="  ")
     if conflicts:
-        lines += [row(), row("CONFLICTING WORKBOOK-WIDE INPUTS:")]
+        lines += rows() + rows("CONFLICTING WORKBOOK-WIDE INPUTS:")
         for vc in conflicts:
-            lines.append(row(f"  {vc.section}: {vc.detail}"))
-        lines += [row("  The merged totals will NOT equal the sum of the "
-                      "inputs until fixed.")]
+            lines += rows(f"  {vc.section}: {vc.detail}", indent="    ")
+        lines += rows("  The merged totals will NOT equal the sum of the inputs "
+                      "until fixed.", indent="  ")
     lines += [bar, bar, ""]
     sys.stderr.write("\n".join(lines) + "\n")
     sys.stderr.flush()
@@ -92,6 +100,19 @@ def find_xlsx_recursive(folder: str) -> List[str]:
             if name.lower().endswith((".xlsx", ".xlsm")):
                 out.append(os.path.join(root, name))
     return sorted(out)
+
+
+def _pi_name(budget) -> str:
+    """A display name for the budget: the PI Name(s) cell, else the first
+    named senior person, else empty."""
+    pi = budget.get("PINames")
+    if pi and str(pi).strip():
+        return str(pi).strip()
+    for i in range(12):
+        name = budget.get(f"Senior{chr(65 + i)}Name")
+        if name and str(name).strip():
+            return str(name).strip()
+    return ""
 
 
 def _unique(prefix: str, used: set) -> str:
@@ -155,10 +176,10 @@ def process_group(name: str, files: List[str], out_dir: str,
         write_document(
             os.path.join(out_dir, f"{base}_justification.tex"),
             title="Budget Justification",
+            subtitle=_pi_name(budget) or None,   # PI name as a subtitle
             defs_inputs=[],
             sections=[("Budget", budget, None, False, True)],
-            intro=("This document justifies the funds requested from the U.S. "
-                   "Department of Energy for the proposed research."),
+            intro="",                            # no boilerplate lead sentence
             defs_inline=render_defs(budget, "Budget", bare=True),
         )
 

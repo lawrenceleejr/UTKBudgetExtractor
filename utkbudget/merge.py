@@ -140,11 +140,12 @@ def _set(ws, row: int, col: str, value) -> bool:
 
 
 def _resolve_sheet(wb, name: str):
-    """Return the worksheet matching ``name`` (tolerant of trailing spaces)."""
+    """Return the worksheet matching ``name`` (tolerant of case and trailing
+    spaces, e.g. a re-save that renames 'UTK Budget' to 'UTK BUDGET')."""
     if name in wb.sheetnames:
         return wb[name]
     for sn in wb.sheetnames:
-        if sn.strip() == name.strip():
+        if sn.strip().upper() == name.strip().upper():
             return wb[sn]
     return None
 
@@ -617,10 +618,10 @@ def write_merged_workbook(
         template_wb = load_workbook(template_path, data_only=False)
         value_wbs = [load_workbook(p, data_only=True) for p in input_paths]
 
-    if SHEET_NAME not in template_wb.sheetnames:
+    ws_t = _resolve_sheet(template_wb, SHEET_NAME)
+    if ws_t is None:
         raise ValueError(f"{template_path!r}: missing worksheet {SHEET_NAME!r}")
-    ws_t = template_wb[SHEET_NAME]
-    main_values = [wb[SHEET_NAME] for wb in value_wbs]
+    main_values = [_resolve_sheet(wb, SHEET_NAME) for wb in value_wbs]
 
     issues: List[MergeIssue] = []
 

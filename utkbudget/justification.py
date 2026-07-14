@@ -40,13 +40,17 @@ PREAMBLE = r"""\documentclass[11pt]{article}
 """
 
 
-def _travel_table(prefix: str) -> str:
-    """A per-period domestic/foreign travel table built from the macros."""
-    period_cols = " & ".join(f"Period {i + 1}" for i in range(len(PERIOD_WORDS)))
-    dom = " & ".join(_usd(prefix, f"DomesticTravelYear{w}") for w in PERIOD_WORDS)
-    foreign = " & ".join(_usd(prefix, f"ForeignTravelYear{w}") for w in PERIOD_WORDS)
-    total = " & ".join(_usd(prefix, f"TravelYear{w}") for w in PERIOD_WORDS)
-    colspec = "l" + "r" * len(PERIOD_WORDS) + "r"
+def _travel_table(prefix: str, periods) -> str:
+    """A per-period domestic/foreign travel table built from the macros.
+
+    ``periods`` is the list of active period words (e.g. ``["One", "Two"]``);
+    only those period columns are shown so empty later years are not printed."""
+    nums = [PERIOD_WORDS.index(w) + 1 for w in periods]
+    period_cols = " & ".join(f"Period {i}" for i in nums)
+    dom = " & ".join(_usd(prefix, f"DomesticTravelYear{w}") for w in periods)
+    foreign = " & ".join(_usd(prefix, f"ForeignTravelYear{w}") for w in periods)
+    total = " & ".join(_usd(prefix, f"TravelYear{w}") for w in periods)
+    colspec = "l" + "r" * len(periods) + "r"
     return (
         "\\begin{center}\n"
         f"\\begin{{tabular}}{{{colspec}}}\n"
@@ -61,6 +65,12 @@ def _travel_table(prefix: str) -> str:
         "\\end{tabular}\n"
         "\\end{center}\n"
     )
+
+
+def _active_periods(budget):
+    """Period words that carry any money (fall back to all five if unknown)."""
+    active = [w for w in PERIOD_WORDS if _num(budget, f"GrandYear{w}") != 0]
+    return active or list(PERIOD_WORDS)
 
 
 def _num(budget, name) -> float:
@@ -187,17 +197,23 @@ def _fringe_rate_list(prefix: str, budget) -> str:
 
 
 def _senior_list(prefix: str, budget) -> str:
-    """Itemise each senior person's requested months and base salary."""
+    """Itemise each senior person's base salary and requested person-months in
+    every year that has effort (not just the first)."""
     present = _present_seniors(budget)
     if not present:
         return ""
     items = []
     for L in present:
+        year_parts = [
+            f"{_m(prefix, f'Senior{L}MonthsYear{w}')} in year {i}"
+            for i, w in enumerate(PERIOD_WORDS, start=1)
+            if _num(budget, f"Senior{L}MonthsYear{w}") > 0
+        ]
+        months = ", ".join(year_parts) if year_parts else "effort as budgeted"
         items.append(
-            f"\\item {_m(prefix, f'Senior{L}Name')}: "
-            f"{_m(prefix, f'Senior{L}PersonMonths')} person-months at a base "
-            f"{_m(prefix, f'Senior{L}ApptType')}-month salary of "
-            f"\\${_m(prefix, f'Senior{L}BaseAnnual')}."
+            f"\\item {_m(prefix, f'Senior{L}Name')} "
+            f"(base {_m(prefix, f'Senior{L}ApptType')}-month salary "
+            f"\\${_m(prefix, f'Senior{L}BaseAnnual')}): person-months of {months}."
         )
     return "\\begin{itemize}\n" + "\n".join(items) + "\n\\end{itemize}"
 
@@ -313,7 +329,7 @@ def render_section(prefix: str, budget=None, heading=None,
         "which this research depends. The request is broken down by period and by "
         "domestic vs.\\ foreign travel below."
     )
-    parts.append(_travel_table(prefix))
+    parts.append(_travel_table(prefix, _active_periods(budget)))
     parts.append(
         "\\textbf{Domestic travel} "
         f"({_usd(prefix, 'DomesticTravelTotal')} total, {fy('DomesticTravel')}) "
@@ -386,6 +402,7 @@ def build_document(
     sections: Sequence[Tuple[str, str, bool]],
     intro: str = "",
     defs_inline: str = None,
+    subtitle: str = None,
 ) -> str:
     """Assemble a complete justification document.
 
@@ -399,7 +416,10 @@ def build_document(
     """
     today = _dt.date.today()
     out: List[str] = [provenance_comment(), PREAMBLE]
-    out.append(f"\\title{{{escape_tex(title)}}}")
+    title_tex = escape_tex(title)
+    if subtitle:
+        title_tex += r"\\[4pt]{\large " + escape_tex(subtitle) + "}"
+    out.append(f"\\title{{{title_tex}}}")
     out.append(f"\\date{{{today:%B} {today.day}, {today:%Y}}}")
     out.append("\\begin{document}")
     out.append("\\maketitle")
