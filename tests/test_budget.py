@@ -518,10 +518,12 @@ class CliJustificationTests(unittest.TestCase):
         tmp = tempfile.mkdtemp()
         indir = os.path.join(tmp, "in")
         os.makedirs(indir)
+        # Names deliberately differ from the filenames so the test distinguishes
+        # the (legitimate) PI name from the (unwanted) source filename.
         make_real_input(os.path.join(indir, "PI_Smith.xlsx"),
-                        seniors=[("Smith", 100000, 2)])
+                        seniors=[("Alice", 100000, 2)])
         make_real_input(os.path.join(indir, "PI_Jones.xlsx"),
-                        seniors=[("Jones", 90000, 1)])
+                        seniors=[("Bob", 90000, 1)])
         outdir = os.path.join(tmp, "out")
         run(indir, outdir)
 
@@ -533,19 +535,24 @@ class CliJustificationTests(unittest.TestCase):
 
         with open(smith) as fh:
             smith_text = fh.read()
-        # Standalone: this PI's section only, no other PI, no combined section.
-        self.assertIn(r"\section{PI\_Smith}", smith_text)     # escaped underscore
-        self.assertNotIn("Jones", smith_text)
-        self.assertNotIn("Combined", smith_text)
-        # Each PI \inputs only its own defs file.
-        self.assertIn(r"\input{PI_Smith}", smith_text)
-        self.assertNotIn("PI_Jones", smith_text)
+        # The source filename must appear NOWHERE -- not the raw name, the
+        # sanitized macro prefix, nor an \input of the defs file. No other PI's
+        # data and no combined/section heading either.
+        for needle in ["PI_Smith", "PISmith", "\\input", "\\section{",
+                       "Combined", "Bob"]:
+            self.assertNotIn(needle, smith_text,
+                             f"{needle!r} leaked into the standalone justification")
+        # Self-contained: definitions inlined with a generic macro prefix; the
+        # PI's real name (legitimate budget data) is present.
+        self.assertIn(r"\newcommand{\BudgetGrandTotal}", smith_text)
+        self.assertIn(r"\BudgetGrandTotal{}", smith_text)
+        self.assertIn("Alice", smith_text)
 
-        # The combined justification carries the summed section, not the PIs.
+        # The combined justification carries the summed budget.
         with open(combined) as fh:
             combined_text = fh.read()
         self.assertIn("Combined", combined_text)
-        self.assertNotIn(r"\section{PI\_Smith}", combined_text)
+        self.assertNotIn("PI_Smith", combined_text)
 
 
 class ProvenanceTests(unittest.TestCase):

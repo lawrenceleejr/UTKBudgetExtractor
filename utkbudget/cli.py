@@ -26,7 +26,7 @@ from .extractor import Budget, extract_budget
 from .justification import write_document
 from .merge import (MergeIssue, RowOverflow, ValueConflict, merge_budgets,
                     write_merged_workbook)
-from .texdefs import escape_tex, tex_prefix, write_defs
+from .texdefs import escape_tex, render_defs, tex_prefix, write_defs
 
 GRAND_PREFIX = "Combined"
 
@@ -148,14 +148,18 @@ def process_group(name: str, files: List[str], out_dir: str,
         tex_name = f"{base}.tex"
         write_defs(budget, prefix, os.path.join(out_dir, tex_name))
 
-        # Standalone justification for this single budget (no merged section).
+        # Standalone justification for this single budget.  It is self-contained
+        # (definitions inlined with a generic macro prefix) and carries NO source
+        # filename anywhere -- generic title, no section heading, generic prose --
+        # so it is suitable to drop straight into a PI's own proposal.
         write_document(
             os.path.join(out_dir, f"{base}_justification.tex"),
-            title=f"Budget Justification --- {base}",
-            defs_inputs=[tex_name],
-            sections=[(prefix, base, False)],
+            title="Budget Justification",
+            defs_inputs=[],
+            sections=[("Budget", None, False)],
             intro=("This document justifies the funds requested from the U.S. "
-                   f"Department of Energy for the {escape_tex(base)} budget."),
+                   "Department of Energy for the proposed research."),
+            defs_inline=render_defs(budget, "Budget", bare=True),
         )
 
     # Merged budget definitions (summed field-by-field, drives the .tex).
@@ -177,7 +181,7 @@ def process_group(name: str, files: List[str], out_dir: str,
         just_path,
         title=f"Budget Justification --- {name} (Combined)",
         defs_inputs=[merged_tex_name],
-        sections=[(group_prefix, f"{name} (Combined)", True)],
+        sections=[(group_prefix, None, True)],
         intro=("This document justifies the combined budget -- the sum of the "
                f"{len(files)} contributing budget(s) in {escape_tex(name)} -- "
                "requested from the U.S. Department of Energy."),

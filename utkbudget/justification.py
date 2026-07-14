@@ -92,25 +92,26 @@ def _summary_table(prefix: str) -> str:
     return "\n".join(lines) + "\n"
 
 
-def render_section(prefix: str, title: str, is_sum: bool = False) -> str:
+def render_section(prefix: str, heading=None, is_sum: bool = False) -> str:
     """Return the LaTeX for one budget's justification section.
 
-    ``title`` is human text (typically an input filename or program name) and is
-    LaTeX-escaped before use, so underscores and other special characters are
-    rendered literally rather than breaking compilation."""
-    title = escape_tex(title)
+    ``heading`` is optional human text for a ``\\section`` (e.g. a program name
+    in the master document); it is LaTeX-escaped.  When ``heading`` is ``None``
+    no section title is emitted and the prose stays generic -- deliberately, so
+    a single-budget justification never reveals a source filename.  No budget
+    identifier is ever woven into the narrative."""
     if is_sum:
         opener = (
-            f"This section justifies the {title} request, which is the sum of the "
-            "individual budgets justified above. It represents the total funds "
-            "requested from the Department of Energy across all contributing "
-            "programs and personnel."
+            "This justifies the combined budget -- the sum of the contributing "
+            "budgets -- requested from the U.S. Department of Energy. Costs are "
+            "organized following the standard DOE Office of Science budget "
+            "categories."
         )
     else:
         opener = (
-            f"The following justifies the funds requested in the {title} budget. "
-            "Costs are organized following the standard DOE Office of Science "
-            "budget categories."
+            "The following justifies the funds requested from the U.S. Department "
+            "of Energy. Costs are organized following the standard DOE Office of "
+            "Science budget categories."
         )
 
     def fy(base):
@@ -118,7 +119,8 @@ def render_section(prefix: str, title: str, is_sum: bool = False) -> str:
         return f"{_usd(prefix, base + 'YearOne')} in the first year"
 
     parts: List[str] = []
-    parts.append(f"\\section{{{title}}}")
+    if heading:
+        parts.append(f"\\section{{{escape_tex(heading)}}}")
     parts.append(opener)
     parts.append(_summary_table(prefix))
 
@@ -247,7 +249,7 @@ def render_section(prefix: str, title: str, is_sum: bool = False) -> str:
     # --- Total ----------------------------------------------------------
     parts.append("\\subsection*{Total Requested}")
     parts.append(
-        f"The total funds requested from the Department of Energy for {title} are "
+        "The total funds requested from the Department of Energy are "
         f"{fy('Grand')} and \\textbf{{{_usd(prefix, 'GrandTotal')}}} over the project "
         f"period (direct costs {_usd(prefix, 'DirectTotal')} plus indirect costs "
         f"{_usd(prefix, 'IndirectTotal')})."
@@ -261,13 +263,16 @@ def build_document(
     defs_inputs: Sequence[str],
     sections: Sequence[Tuple[str, str, bool]],
     intro: str = "",
+    defs_inline: str = None,
 ) -> str:
     """Assemble a complete justification document.
 
-    ``defs_inputs`` are relative paths to ``\\input`` (the generated defs
-    files).  ``sections`` is a list of ``(prefix, heading, is_sum)``.  ``title``
-    is human text and is LaTeX-escaped here; ``intro`` is treated as authored
-    LaTeX and is emitted verbatim (callers must escape any names they weave in).
+    Definitions come from EITHER ``defs_inline`` (a ``\\newcommand`` block
+    emitted verbatim, so the document is self-contained and names no external
+    file) OR ``defs_inputs`` (relative paths to ``\\input``).  ``sections`` is a
+    list of ``(prefix, heading_or_None, is_sum)``.  ``title`` is human text and
+    is LaTeX-escaped here; ``intro`` is authored LaTeX emitted verbatim (callers
+    must escape any names they weave in).
     """
     today = _dt.date.today()
     out: List[str] = [provenance_comment(), PREAMBLE]
@@ -276,12 +281,15 @@ def build_document(
     out.append("\\begin{document}")
     out.append("\\maketitle")
 
-    out.append("% --- generated budget definitions ---")
-    for rel in defs_inputs:
-        # strip the .tex extension for \input
-        base = rel[:-4] if rel.endswith(".tex") else rel
-        out.append(f"\\input{{{base}}}")
-    out.append("")
+    if defs_inline:
+        out.append("% --- budget definitions (inlined; self-contained) ---")
+        out.append(defs_inline)
+    else:
+        out.append("% --- generated budget definitions ---")
+        for rel in defs_inputs:
+            base = rel[:-4] if rel.endswith(".tex") else rel  # strip .tex for \input
+            out.append(f"\\input{{{base}}}")
+        out.append("")
 
     if intro:
         out.append(intro)

@@ -89,6 +89,29 @@ def format_value(field) -> str:
     return escape_tex(str(value))
 
 
+def render_defs(budget: Budget, prefix: str, header_note: str = "",
+                include_source: bool = True, bare: bool = False) -> str:
+    """Return ``budget`` as ``\\newcommand`` definitions text.
+
+    ``bare`` drops the comment header entirely (used when the definitions are
+    inlined into a document that already carries its own provenance and must not
+    reveal the source filename).  ``include_source`` keeps/drops just the
+    ``% Source:`` line.
+    """
+    lines = []
+    if not bare:
+        lines.extend(f"% {line}" for line in provenance_lines())
+        if include_source and budget.source:
+            lines.append(f"% Source: {budget.source}")
+        if header_note:
+            lines.append(f"% {header_note}")
+        lines.append(f"% Macro prefix: {prefix}")
+        lines.append("")
+    for field in budget:
+        lines.append("\\newcommand{\\%s%s}{%s}" % (prefix, field.name, format_value(field)))
+    return "\n".join(lines) + "\n"
+
+
 def write_defs(budget: Budget, prefix: str, out_path: str,
                header_note: str = "") -> str:
     """Write ``budget`` to ``out_path`` as ``\\newcommand`` definitions.
@@ -96,13 +119,5 @@ def write_defs(budget: Budget, prefix: str, out_path: str,
     Returns ``out_path`` for convenience.
     """
     with open(out_path, "w") as fh:
-        for line in provenance_lines():
-            fh.write(f"% {line}\n")
-        if budget.source:
-            fh.write(f"% Source: {budget.source}\n")
-        if header_note:
-            fh.write(f"% {header_note}\n")
-        fh.write(f"% Macro prefix: {prefix}\n\n")
-        for field in budget:
-            fh.write("\\newcommand{\\%s%s}{%s}\n" % (prefix, field.name, format_value(field)))
+        fh.write(render_defs(budget, prefix, header_note))
     return out_path
