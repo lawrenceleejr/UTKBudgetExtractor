@@ -585,6 +585,19 @@ class JustificationContentTests(unittest.TestCase):
         doc = build_document("Budget Justification", [], [], subtitle="Dr. Jane_Doe")
         self.assertIn(r"{\large Dr. Jane\_Doe}", doc)
 
+    def test_faculty_summary_table(self):
+        from utkbudget.justification import build_faculty_summary
+        tex = build_faculty_summary([("Dr. A", 100.0, 50.0, 150.0),
+                                     ("R_D Lab", 200.0, 100.0, 300.0)])
+        # one row per faculty with their figures
+        self.assertIn(r"Dr. A & \$100.00 & \$50.00 & \$150.00 \\", tex)
+        self.assertIn(r"R\_D Lab & \$200.00 & \$100.00 & \$300.00 \\", tex)  # escaped
+        # total row = column sums
+        self.assertIn(r"\textbf{Total} & \textbf{\$300.00} & \textbf{\$150.00} & "
+                      r"\textbf{\$450.00} \\", tex)
+        # includable via the same guard as the justifications
+        self.assertIn(r"\ifdefined\budgetjustificationincluded", tex)
+
 
 class CliJustificationTests(unittest.TestCase):
     def test_justifications_input_shared_defs_and_driver(self):
@@ -636,6 +649,15 @@ class CliJustificationTests(unittest.TestCase):
         with open(combined) as fh:
             combined_text = fh.read()
         self.assertIn("Combined", combined_text)
+
+        # The faculty summary lists one row per PI (their final asks).
+        summary = os.path.join(outdir, "faculty_summary.tex")
+        self.assertTrue(os.path.exists(summary))
+        with open(summary) as fh:
+            summary_text = fh.read()
+        self.assertIn("Alice", summary_text)
+        self.assertIn("Bob", summary_text)
+        self.assertIn(r"\textbf{Total}", summary_text)
 
 
 class ProvenanceTests(unittest.TestCase):

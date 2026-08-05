@@ -486,6 +486,50 @@ def build_pdf_driver(justifications: Sequence[str], title: str = "Budget Justifi
     return "\n".join(lines) + "\n"
 
 
+def build_faculty_summary(entries, title: str = "DOE Budget Request by Faculty") -> str:
+    """A summary table -- one row per faculty with their final DOE ask -- meant
+    to be ``\\input`` into a larger document.
+
+    ``entries`` is a list of ``(faculty_name, direct, indirect, total)`` with the
+    dollar figures as numbers; the total row is the column sums.  Uses only plain
+    ``\\hline`` rules so it drops into any document with no extra packages, and
+    the same ``\\ifdefined\\budgetjustificationincluded`` guard as the
+    justifications so it also compiles on its own."""
+    def money(x):
+        return f"\\${x:,.2f}"
+
+    td = sum(e[1] for e in entries)
+    ti = sum(e[2] for e in entries)
+    tt = sum(e[3] for e in entries)
+
+    out = [provenance_comment()]
+    out.append(
+        "% Summary table: one row per faculty with their DOE request.  Compiles\n"
+        "% on its own; to \\input it into a larger document, put\n"
+        "% \\def\\budgetjustificationincluded{} in that document's preamble first.")
+    out.append(
+        f"\\ifdefined{INCLUDE_GUARD}\\else\n"
+        + PREAMBLE
+        + f"\\title{{{escape_tex(title)}}}\n"
+        + "\\begin{document}\n\\maketitle\n\\fi")
+
+    lines = ["\\begin{center}", "\\begin{tabular}{lrrr}", "\\hline",
+             "Faculty & Direct Costs & Indirect (F\\&A) & Total Requested \\\\",
+             "\\hline"]
+    for name, direct, indirect, total in entries:
+        lines.append(f"{escape_tex(str(name))} & {money(direct)} & "
+                     f"{money(indirect)} & {money(total)} \\\\")
+    lines.append("\\hline")
+    lines.append(f"\\textbf{{Total}} & \\textbf{{{money(td)}}} & "
+                 f"\\textbf{{{money(ti)}}} & \\textbf{{{money(tt)}}} \\\\")
+    lines.append("\\hline")
+    lines += ["\\end{tabular}", "\\end{center}"]
+    out.append("\n".join(lines))
+
+    out.append(f"\\ifdefined{INCLUDE_GUARD}\\else\n\\end{{document}}\n\\fi")
+    return "\n\n".join(out) + "\n"
+
+
 def write_document(path: str, *args, **kwargs) -> str:
     content = build_document(*args, **kwargs)
     with open(path, "w") as fh:

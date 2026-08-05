@@ -22,6 +22,9 @@ and it produces, for **every** input file:
    summed budget.
 6. **A driver** (`all_justifications.tex`) that compiles **every** justification
    into a single PDF.
+7. **A faculty summary table** (`faculty_summary.tex`) — one row per faculty
+   with their direct, indirect, and total DOE ask (and a grand-total row), ready
+   to `\input` into a larger document.
 
 ## Install
 
@@ -57,7 +60,8 @@ output/
 ├── merged.xlsx                  # Smith + Jones, summed
 ├── merged.tex                   # \newcommand defs for the sum
 ├── justification.tex            # combined-total justification (the sum)
-└── all_justifications.tex       # compiles every justification into one PDF
+├── all_justifications.tex       # compiles every justification into one PDF
+└── faculty_summary.tex          # one-row-per-faculty request table
 ```
 
 ### Folder with program sub-folders
