@@ -494,11 +494,148 @@ class TexTests(unittest.TestCase):
         with open(defs) as fh:
             defs_text = fh.read()
         defined = set(re.findall(r"\\newcommand\{\\([A-Za-z]+)\}", defs_text))
-        doc = build_document("T", ["b.tex"], [("Test", "Test Budget", False)])
-        body = re.sub(r"\\input\{[^}]+\}", "", doc)
+        doc = build_document("T", ["b.tex"],
+                             [("Test", b, "Test Budget", False, True)])
+        body = re.sub(r"(?<!\\)%.*", "", doc)      # drop LaTeX comments first
+        body = re.sub(r"\\input\{[^}]+\}", "", body)
         used = set(re.findall(r"\\([A-Za-z]+)\{\}", body))
         undefined = used - defined
         self.assertEqual(undefined, set(), f"undefined macros: {undefined}")
+
+    def test_underscores_escaped_in_titles_and_prose(self):
+        from utkbudget.justification import render_section
+        # A section heading with an underscore must be escaped, or LaTeX won't
+        # compile.
+        section = render_section("Test", heading="PI_Smith_2025")
+        self.assertIn(r"\section{PI\_Smith\_2025}", section)
+        self.assertNotIn("PI_Smith", section)   # no raw underscore survives
+        # Document title is escaped too.
+        doc = build_document("Grant_Budget_A", [], [])
+        self.assertIn(r"\title{Grant\_Budget\_A}", doc)
+
+
+class JustificationContentTests(unittest.TestCase):
+    def _budget(self):
+        from utkbudget.extractor import Budget, KIND_MONEY, KIND_RATE, KIND_TEXT, KIND_MONTHS
+        b = Budget(source="x")
+
+        def money(name, v):
+            b.add(name, v, KIND_MONEY)
+        # Active periods 1-3 only (years 4-5 zero).
+        for w, v in zip(["One", "Two", "Three", "Four", "Five"], [100, 100, 100, 0, 0]):
+            money(f"GrandYear{w}", v)
+        money("GrandTotal", 300)
+        money("SeniorSubtotalTotal", 1000)
+        money("GRASubtotalTotal", 500)
+        money("PostdocSubtotalTotal", 0)      # omitted from the table
+        money("FringeTotal", 400)
+        money("EquipmentTotal", 0)            # -> "no equipment"
+        money("ParticipantSupportTotal", 0)   # -> "none requested"
+        money("TravelTotal", 60)
+        money("OtherDirectTotal", 200)
+        money("DirectTotal", 2000)
+        money("IndirectTotal", 800)
+        for w in ["One", "Two", "Three", "Four", "Five"]:
+            for base in ["DomesticTravel", "ForeignTravel", "Travel"]:
+                money(f"{base}Year{w}", 10)
+        b.add("OverheadRateYearOne", 53.5, KIND_RATE)
+        b.add("FandARateType", "Research ON-Campus", KIND_TEXT)
+        for name, v in [("SalaryInflationUT", 3.0), ("SalaryInflationJFO", 4.3),
+                        ("SalaryInflationGRA", 5.0), ("TuitionInflation", 2.0),
+                        ("SeniorAFringeRate", 34.6), ("GRAAFringeRate", 10.8)]:
+            b.add(name, v, KIND_RATE)
+        b.add("SeniorAName", "Dr. Example", KIND_TEXT)
+        b.add("SeniorAType", "JFO", KIND_TEXT)
+        b.add("SeniorAApptType", 9, KIND_TEXT)
+        money("SeniorABaseAnnual", 120000)
+        money("SeniorATotal", 1000)
+        for w, v in zip(["One", "Two", "Three", "Four", "Five"], [2, 2, 0, 0, 0]):
+            b.add(f"SeniorAMonthsYear{w}", v, KIND_MONTHS)
+        return b
+
+    def test_section_content(self):
+        from utkbudget.justification import render_section
+        s = render_section("X", self._budget(), heading=None, is_sum=False, detailed=True)
+        # Summary table: nonzero categories only; zero rows omitted.
+        self.assertIn("Senior Personnel &", s)
+        self.assertIn("Graduate Research Assistants &", s)
+        self.assertNotIn("Post-docs &", s)
+        self.assertNotIn("Equipment &", s)
+        self.assertNotIn("Participant Support &", s)
+        # F&A rate named in the row label.
+        self.assertIn(r"Indirect Costs (F\&A, \XOverheadRateYearOne{}\%)", s)
+        # Escalation table shows JFO (a JFO senior exists) + GRA + tuition rows.
+        self.assertIn("Jointly-appointed faculty (JFO)", s)
+        self.assertIn("Graduate tuition", s)
+        # Senior list: only nonzero-month years (1 and 2), not 3-5.
+        self.assertIn("in year 1", s)
+        self.assertIn("in year 2", s)
+        self.assertNotIn("in year 3", s)
+        # Equipment / participant zero-value text.
+        self.assertIn("No equipment is requested", s)
+        self.assertIn("No participant support costs are requested", s)
+        # F&A: fixed rate, no "first period".
+        self.assertIn("fixed for all periods", s)
+        self.assertNotIn("first period", s)
+        # Travel table: only active periods (1-3), not 4-5.
+        self.assertIn("Period 3", s)
+        self.assertNotIn("Period 4", s)
+
+    def test_subtitle_rendered_and_escaped(self):
+        doc = build_document("Budget Justification", [], [], subtitle="Dr. Jane_Doe")
+        self.assertIn(r"{\large Dr. Jane\_Doe}", doc)
+
+
+class CliJustificationTests(unittest.TestCase):
+    def test_justifications_input_shared_defs_and_driver(self):
+        from utkbudget.cli import run
+        tmp = tempfile.mkdtemp()
+        indir = os.path.join(tmp, "in")
+        os.makedirs(indir)
+        # PI names deliberately differ from the filenames.
+        make_real_input(os.path.join(indir, "PI_Smith.xlsx"),
+                        seniors=[("Alice", 100000, 2)])
+        make_real_input(os.path.join(indir, "PI_Jones.xlsx"),
+                        seniors=[("Bob", 90000, 1)])
+        outdir = os.path.join(tmp, "out")
+        run(indir, outdir)
+
+        smith = os.path.join(outdir, "PI_Smith_justification.tex")
+        defs = os.path.join(outdir, "PI_Smith.tex")
+        combined = os.path.join(outdir, "justification.tex")
+        driver = os.path.join(outdir, "all_justifications.tex")
+        for p in (smith, defs, combined, driver):
+            self.assertTrue(os.path.exists(p), f"missing {p}")
+
+        with open(smith) as fh:
+            smith_text = fh.read()
+        # It \input{}s its dedicated defs file (not inlined) and uses that file's
+        # unique macro prefix; the include guard lets it be dropped into a proposal.
+        self.assertIn(r"\input{PI_Smith}", smith_text)
+        self.assertNotIn(r"\newcommand", smith_text)   # defs live in the defs file
+        self.assertIn(r"\ifdefined\budgetjustificationincluded", smith_text)
+        self.assertIn(r"\PISmith", smith_text)          # unique-prefix macro
+        # Rendered content: generic title + PI subtitle, no other PI.
+        self.assertIn("Budget Justification", smith_text)
+        self.assertIn("Alice", smith_text)
+        self.assertNotIn("Bob", smith_text)
+
+        # The dedicated defs file holds the uniquely-prefixed definitions.
+        with open(defs) as fh:
+            self.assertIn(r"\newcommand{\PISmithGrandTotal}", fh.read())
+
+        # The driver compiles every justification into one PDF.
+        with open(driver) as fh:
+            driver_text = fh.read()
+        self.assertIn(r"\def\budgetjustificationincluded{}", driver_text)
+        self.assertIn(r"\usepackage{import}", driver_text)
+        self.assertIn("PI_Smith_justification", driver_text)
+        self.assertIn("PI_Jones_justification", driver_text)
+
+        # The combined justification carries the summed budget.
+        with open(combined) as fh:
+            combined_text = fh.read()
+        self.assertIn("Combined", combined_text)
 
 
 class ProvenanceTests(unittest.TestCase):

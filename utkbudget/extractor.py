@@ -192,12 +192,19 @@ def extract_budget(path: str) -> Budget:
     another engine that evaluates formulas) for the totals to be populated.
     """
     wb = load_workbook(filename=path, data_only=True)
-    if SHEET_NAME not in wb.sheetnames:
+    ws = None
+    if SHEET_NAME in wb.sheetnames:
+        ws = wb[SHEET_NAME]
+    else:  # tolerate case / trailing-space differences (e.g. after a re-save)
+        for sn in wb.sheetnames:
+            if sn.strip().upper() == SHEET_NAME.strip().upper():
+                ws = wb[sn]
+                break
+    if ws is None:
         raise ValueError(
             f"{path!r}: expected a worksheet named {SHEET_NAME!r}; "
             f"found {wb.sheetnames}"
         )
-    ws = wb[SHEET_NAME]
     b = Budget(source=path)
 
     # -- Metadata ---------------------------------------------------------
@@ -212,11 +219,15 @@ def extract_budget(path: str) -> Budget:
         return chr(ord("A") + i)
 
     # -- Section A: Senior Personnel --------------------------------------
+    person_month_cols = ["F", "G", "H", "I", "J"]  # person-months, periods 1-5
     for i, row in enumerate(SENIOR_ROWS):
         b.add(f"Senior{abc(i)}Name", ws[f"B{row}"].value, KIND_TEXT)
+        b.add(f"Senior{abc(i)}Type", ws[f"C{row}"].value, KIND_TEXT)  # UT / JFO
         b.add(f"Senior{abc(i)}BaseAnnual", ws[f"D{row}"].value, KIND_MONEY)
         b.add(f"Senior{abc(i)}ApptType", ws[f"E{row}"].value, KIND_TEXT)
         b.add(f"Senior{abc(i)}PersonMonths", ws[f"F{row}"].value, KIND_MONTHS)
+        for word, col in zip(PERIOD_WORDS, person_month_cols):
+            b.add(f"Senior{abc(i)}MonthsYear{word}", ws[f"{col}{row}"].value, KIND_MONTHS)
         b.add_line(f"Senior{abc(i)}", ws, row, KIND_MONEY)
     b.add_line("SeniorSubtotal", ws, SENIOR_SUBTOTAL_ROW, KIND_MONEY)
 
@@ -235,6 +246,29 @@ def extract_budget(path: str) -> Budget:
     personnel_group("Admin", [ADMIN_ROW])
     personnel_group("OtherStaff", OTHER_STAFF_ROWS)
     b.add_line("OtherPersonnelSubtotal", ws, OTHER_SUBTOTAL_ROW, KIND_MONEY)
+
+    # Per-category salary subtotals (derived: the sheet only totals all "other
+    # personnel" together, but the justification lists each category on its own
+    # line).  Summed from the per-person rows already extracted above.
+    def category_subtotal(out_base: str, members: Iterable[str]) -> None:
+        members = list(members)
+        for word in PERIOD_WORDS + ["Total"]:
+            suffix = f"Year{word}" if word != "Total" else "Total"
+            total = 0.0
+            for m in members:
+                v = b.get(f"{m}{suffix}")
+                try:
+                    total += float(v) if v not in (None, "") else 0.0
+                except (TypeError, ValueError):
+                    pass
+            b.add(f"{out_base}{suffix}", total, KIND_MONEY)
+
+    category_subtotal("PostdocSubtotal", (f"Postdoc{abc(i)}" for i in range(3)))
+    category_subtotal("OtherProfSubtotal", (f"OtherProf{abc(i)}" for i in range(3)))
+    category_subtotal("GRASubtotal", (f"GRA{abc(i)}" for i in range(4)))
+    category_subtotal("UndergradSubtotal", ["UndergradA"])
+    category_subtotal("AdminSubtotal", ["AdminA"])
+    category_subtotal("OtherStaffSubtotal", (f"OtherStaff{abc(i)}" for i in range(2)))
     # NB: base names never end in "Total"; add_line() appends the suffix, so the
     # row total below becomes the macro \<prefix>WagesTotal (not WagesTotalTotal).
     b.add_line("Wages", ws, WAGES_TOTAL_ROW, KIND_MONEY)

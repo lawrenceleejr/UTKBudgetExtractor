@@ -11,12 +11,17 @@ and it produces, for **every** input file:
 1. **A LaTeX definitions file** named after the input (`PI_Smith.xlsx` →
    `PI_Smith.tex`) containing every labelled number as a `\newcommand`, ready to
    `\input` into a proposal or justification.
-2. **A merged Excel workbook** (`merged.xlsx`) **in the same format as the
+2. **A DOE budget justification for that input** (`PI_Smith_justification.tex`)
+   — only that budget, with travel called out in detail. It `\input`s its own
+   defs file (item 1), so it both compiles on its own and drops into a larger
+   proposal (see [Including justifications](#including-justifications)).
+3. **A merged Excel workbook** (`merged.xlsx`) **in the same format as the
    inputs**, combining all of the budgets (see [Merging](#how-the-merge-works)).
-3. **Merged LaTeX definitions** (`merged.tex`) for the combined budget.
-4. **A DOE budget-justification document** (`justification.tex`) with a written
-   justification for each input file followed by a justification of the combined
-   sum, with travel called out in detail.
+4. **Merged LaTeX definitions** (`merged.tex`) for the combined budget.
+5. **A separate combined-total justification** (`justification.tex`) for the
+   summed budget.
+6. **A driver** (`all_justifications.tex`) that compiles **every** justification
+   into a single PDF.
 
 ## Install
 
@@ -45,11 +50,14 @@ produces
 
 ```
 output/
-├── PI_Smith.tex          # \newcommand defs for Smith
-├── PI_Jones.tex          # \newcommand defs for Jones
-├── merged.xlsx           # Smith + Jones, summed
-├── merged.tex            # \newcommand defs for the sum
-└── justification.tex     # justification per file + the combined sum
+├── PI_Smith.tex                 # \newcommand defs for Smith
+├── PI_Smith_justification.tex   # Smith's justification (\input's PI_Smith.tex)
+├── PI_Jones.tex                 # \newcommand defs for Jones
+├── PI_Jones_justification.tex   # Jones's justification (\input's PI_Jones.tex)
+├── merged.xlsx                  # Smith + Jones, summed
+├── merged.tex                   # \newcommand defs for the sum
+├── justification.tex            # combined-total justification (the sum)
+└── all_justifications.tex       # compiles every justification into one PDF
 ```
 
 ### Folder with program sub-folders
@@ -75,15 +83,40 @@ produces
 output/
 ├── ProgramOne/
 │   ├── PI_Smith.tex
+│   ├── PI_Smith_justification.tex     # Smith only (\input's PI_Smith.tex)
 │   ├── PI_Jones.tex
+│   ├── PI_Jones_justification.tex     # Jones only (\input's PI_Jones.tex)
 │   ├── ProgramOne_merged.xlsx
 │   ├── ProgramOne_merged.tex
-│   └── ProgramOne_justification.tex   # per file + program sum
+│   └── ProgramOne_justification.tex   # Program 1 combined total
 ├── ProgramTwo/ ...
 ├── ProgramThree/ ...
-├── merged.xlsx          # fully merged across every program
-├── merged.tex           # defs for the grand total
-└── justification.tex    # per-program + fully merged grand total
+├── merged.xlsx              # fully merged across every program
+├── merged.tex               # defs for the grand total
+├── justification.tex        # per-program + fully merged grand total
+└── all_justifications.tex   # compiles every justification into one PDF
+```
+
+## Including justifications
+
+Each `*_justification.tex` both compiles on its own **and** `\input`s into a
+larger proposal. It `\input`s its own defs file and wraps its preamble in an
+`\ifdefined` guard, so:
+
+```latex
+% in your proposal's preamble:
+\def\budgetjustificationincluded{}   % skip each justification's own preamble
+...
+% in the body:
+\input{output/ProgramOne/PI_Smith_justification}
+```
+
+To compile **all** justifications into a single PDF, use the generated driver
+(it defines the guard and pulls in every justification via the `import`
+package):
+
+```bash
+latexmk -pdf output/all_justifications.tex      # or: pdflatex it twice
 ```
 
 ## Using the output in a proposal
