@@ -396,52 +396,94 @@ def render_section(prefix: str, budget=None, heading=None,
     return "\n\n".join(parts)
 
 
+INCLUDE_GUARD = r"\budgetjustificationincluded"
+
+
 def build_document(
     title: str,
     defs_inputs: Sequence[str],
     sections: Sequence[Tuple[str, str, bool]],
     intro: str = "",
-    defs_inline: str = None,
     subtitle: str = None,
 ) -> str:
-    """Assemble a complete justification document.
+    """Assemble a justification document.
 
-    Definitions come from EITHER ``defs_inline`` (a ``\\newcommand`` block
-    emitted verbatim, so the document is self-contained and names no external
-    file) OR ``defs_inputs`` (relative paths to ``\\input``).  ``sections`` is a
-    list of ``(prefix, budget, heading_or_None, is_sum, detailed)`` (see
-    :func:`render_section`).  ``title`` is human text and is LaTeX-escaped here;
-    ``intro`` is authored LaTeX emitted verbatim (callers must escape any names
-    they weave in).
+    The definitions are pulled in with ``\\input`` from ``defs_inputs`` (the
+    dedicated per-budget defs files, each with its own unique macro prefix), so
+    the numbers stay in one place and several justifications can be combined
+    without macro clashes.  ``sections`` is a list of ``(prefix, budget,
+    heading_or_None, is_sum, detailed)`` (see :func:`render_section`).
+
+    The file both compiles on its own AND ``\\input``s cleanly into a larger
+    proposal.  The ``\\documentclass`` .. ``\\begin{document}`` preamble and the
+    closing ``\\end{document}`` are wrapped in an ``\\ifdefined`` guard: define
+    ``\\budgetjustificationincluded`` in the parent document's preamble to skip
+    them (see :func:`build_pdf_driver`).  ``title`` / ``subtitle`` are human text
+    and LaTeX-escaped; ``intro`` is authored LaTeX emitted verbatim.
     """
     today = _dt.date.today()
-    out: List[str] = [provenance_comment(), PREAMBLE]
     title_tex = escape_tex(title)
-    if subtitle:
-        title_tex += r"\\[4pt]{\large " + escape_tex(subtitle) + "}"
-    out.append(f"\\title{{{title_tex}}}")
-    out.append(f"\\date{{{today:%B} {today.day}, {today:%Y}}}")
-    out.append("\\begin{document}")
-    out.append("\\maketitle")
+    subtitle_tex = escape_tex(subtitle) if subtitle else ""
 
-    if defs_inline:
-        out.append("% --- budget definitions (inlined; self-contained) ---")
-        out.append(defs_inline)
-    else:
-        out.append("% --- generated budget definitions ---")
-        for rel in defs_inputs:
-            base = rel[:-4] if rel.endswith(".tex") else rel  # strip .tex for \input
-            out.append(f"\\input{{{base}}}")
-        out.append("")
+    out: List[str] = [provenance_comment()]
+    out.append(
+        "% Self-contained: this file \\input{}s its own budget definitions and\n"
+        "% compiles on its own (e.g. `pdflatex thisfile.tex`).  To \\input it into\n"
+        "% a larger proposal instead, put  \\def\\budgetjustificationincluded{}  in\n"
+        "% that document's preamble first; the preamble and\n"
+        "% \\begin{document}/\\end{document} below are then skipped automatically.")
+
+    titled = title_tex + (r"\\[4pt]{\large " + subtitle_tex + "}" if subtitle_tex else "")
+    out.append(
+        f"\\ifdefined{INCLUDE_GUARD}\\else\n"
+        + PREAMBLE
+        + f"\\title{{{titled}}}\n"
+        + f"\\date{{{today:%B} {today.day}, {today:%Y}}}\n"
+        + "\\begin{document}\n"
+        + "\\maketitle\n"
+        + "\\fi")
+
+    out.append("% --- budget definitions (the dedicated defs file) ---")
+    for rel in defs_inputs:
+        base = rel[:-4] if rel.endswith(".tex") else rel  # strip .tex for \input
+        out.append(f"\\input{{{base}}}")
+
+    # When included there is no \maketitle, so print a heading identifying this
+    # budget (kept out of standalone output, where the title block already shows).
+    heading = title_tex + (" --- " + subtitle_tex if subtitle_tex else "")
+    out.append(f"\\ifdefined{INCLUDE_GUARD}\\section*{{{heading}}}\\fi")
 
     if intro:
         out.append(intro)
 
-    for prefix, budget, heading, is_sum, detailed in sections:
-        out.append(render_section(prefix, budget, heading, is_sum, detailed))
+    for prefix, budget, sec_heading, is_sum, detailed in sections:
+        out.append(render_section(prefix, budget, sec_heading, is_sum, detailed))
 
-    out.append("\\end{document}")
+    out.append(f"\\ifdefined{INCLUDE_GUARD}\\else\n\\end{{document}}\n\\fi")
     return "\n\n".join(out) + "\n"
+
+
+def build_pdf_driver(justifications: Sequence[str], title: str = "Budget Justifications") -> str:
+    """A standalone driver that compiles every justification into one PDF.
+
+    ``justifications`` are output-root-relative paths (e.g.
+    ``"ProgramOne/PI_Smith_justification.tex"``).  Each is pulled in with the
+    ``import`` package's ``\\subimport`` so that the ``\\input`` of its defs file
+    still resolves inside that file's own folder, and the include guard is
+    defined so their preambles are skipped."""
+    lines = [provenance_comment(), PREAMBLE.rstrip(),
+             "\\usepackage{import}",
+             f"\\def{INCLUDE_GUARD}{{}}",
+             f"\\title{{{escape_tex(title)}}}",
+             "\\begin{document}",
+             "\\maketitle", ""]
+    for rel in justifications:
+        rel = rel[:-4] if rel.endswith(".tex") else rel
+        subdir, _, name = rel.rpartition("/")
+        lines.append(f"\\subimport{{{subdir + '/' if subdir else './'}}}{{{name}}}")
+        lines.append("\\clearpage")
+    lines.append("\\end{document}")
+    return "\n".join(lines) + "\n"
 
 
 def write_document(path: str, *args, **kwargs) -> str:

@@ -496,7 +496,8 @@ class TexTests(unittest.TestCase):
         defined = set(re.findall(r"\\newcommand\{\\([A-Za-z]+)\}", defs_text))
         doc = build_document("T", ["b.tex"],
                              [("Test", b, "Test Budget", False, True)])
-        body = re.sub(r"\\input\{[^}]+\}", "", doc)
+        body = re.sub(r"(?<!\\)%.*", "", doc)      # drop LaTeX comments first
+        body = re.sub(r"\\input\{[^}]+\}", "", body)
         used = set(re.findall(r"\\([A-Za-z]+)\{\}", body))
         undefined = used - defined
         self.assertEqual(undefined, set(), f"undefined macros: {undefined}")
@@ -586,13 +587,12 @@ class JustificationContentTests(unittest.TestCase):
 
 
 class CliJustificationTests(unittest.TestCase):
-    def test_each_pi_gets_standalone_justification(self):
+    def test_justifications_input_shared_defs_and_driver(self):
         from utkbudget.cli import run
         tmp = tempfile.mkdtemp()
         indir = os.path.join(tmp, "in")
         os.makedirs(indir)
-        # Names deliberately differ from the filenames so the test distinguishes
-        # the (legitimate) PI name from the (unwanted) source filename.
+        # PI names deliberately differ from the filenames.
         make_real_input(os.path.join(indir, "PI_Smith.xlsx"),
                         seniors=[("Alice", 100000, 2)])
         make_real_input(os.path.join(indir, "PI_Jones.xlsx"),
@@ -601,31 +601,41 @@ class CliJustificationTests(unittest.TestCase):
         run(indir, outdir)
 
         smith = os.path.join(outdir, "PI_Smith_justification.tex")
-        jones = os.path.join(outdir, "PI_Jones_justification.tex")
+        defs = os.path.join(outdir, "PI_Smith.tex")
         combined = os.path.join(outdir, "justification.tex")
-        for p in (smith, jones, combined):
+        driver = os.path.join(outdir, "all_justifications.tex")
+        for p in (smith, defs, combined, driver):
             self.assertTrue(os.path.exists(p), f"missing {p}")
 
         with open(smith) as fh:
             smith_text = fh.read()
-        # The source filename must appear NOWHERE -- not the raw name, the
-        # sanitized macro prefix, nor an \input of the defs file. No other PI's
-        # data and no combined/section heading either.
-        for needle in ["PI_Smith", "PISmith", "\\input", "\\section{",
-                       "Combined", "Bob"]:
-            self.assertNotIn(needle, smith_text,
-                             f"{needle!r} leaked into the standalone justification")
-        # Self-contained: definitions inlined with a generic macro prefix; the
-        # PI's real name (legitimate budget data) is present.
-        self.assertIn(r"\newcommand{\BudgetGrandTotal}", smith_text)
-        self.assertIn(r"\BudgetGrandTotal{}", smith_text)
+        # It \input{}s its dedicated defs file (not inlined) and uses that file's
+        # unique macro prefix; the include guard lets it be dropped into a proposal.
+        self.assertIn(r"\input{PI_Smith}", smith_text)
+        self.assertNotIn(r"\newcommand", smith_text)   # defs live in the defs file
+        self.assertIn(r"\ifdefined\budgetjustificationincluded", smith_text)
+        self.assertIn(r"\PISmith", smith_text)          # unique-prefix macro
+        # Rendered content: generic title + PI subtitle, no other PI.
+        self.assertIn("Budget Justification", smith_text)
         self.assertIn("Alice", smith_text)
+        self.assertNotIn("Bob", smith_text)
+
+        # The dedicated defs file holds the uniquely-prefixed definitions.
+        with open(defs) as fh:
+            self.assertIn(r"\newcommand{\PISmithGrandTotal}", fh.read())
+
+        # The driver compiles every justification into one PDF.
+        with open(driver) as fh:
+            driver_text = fh.read()
+        self.assertIn(r"\def\budgetjustificationincluded{}", driver_text)
+        self.assertIn(r"\usepackage{import}", driver_text)
+        self.assertIn("PI_Smith_justification", driver_text)
+        self.assertIn("PI_Jones_justification", driver_text)
 
         # The combined justification carries the summed budget.
         with open(combined) as fh:
             combined_text = fh.read()
         self.assertIn("Combined", combined_text)
-        self.assertNotIn("PI_Smith", combined_text)
 
 
 class ProvenanceTests(unittest.TestCase):
