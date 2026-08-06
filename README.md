@@ -24,7 +24,10 @@ and it produces, for **every** input file:
    into a single PDF.
 7. **A faculty summary table** (`faculty_summary.tex`) — one row per faculty
    with their direct, indirect, and total DOE ask (and a grand-total row), ready
-   to `\input` into a larger document.
+   to `\input` into a larger document. With program sub-folders (a multi-thrust
+   proposal, e.g. `Energy Frontier/`, `Intensity Frontier/`, `Theory
+   Frontier/`), the PIs are grouped under each sub-folder's name with a
+   per-thrust subtotal.
 
 ## Install
 
@@ -98,7 +101,8 @@ output/
 ├── merged.xlsx              # fully merged across every program
 ├── merged.tex               # defs for the grand total
 ├── justification.tex        # per-program + fully merged grand total
-└── all_justifications.tex   # compiles every justification into one PDF
+├── all_justifications.tex   # compiles every justification into one PDF
+└── faculty_summary.tex      # PIs grouped by program, per-program subtotals
 ```
 
 ## Including justifications

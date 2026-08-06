@@ -236,11 +236,20 @@ def _faculty_summary_entries(budgets: List[Budget]):
             for b in budgets]
 
 
-def _write_faculty_summary(output_dir: str, budgets: List[Budget]) -> None:
-    """Write ``faculty_summary.tex`` -- a one-row-per-faculty request table."""
+def _write_faculty_summary(output_dir: str, budgets: List[Budget] = None,
+                           groups: List[Tuple[str, List[Budget]]] = None) -> None:
+    """Write ``faculty_summary.tex`` -- a one-row-per-faculty request table.
+
+    Pass ``budgets`` for a flat table, or ``groups`` (``(sub-folder name,
+    budgets)`` pairs) to group the PIs by thrust with per-thrust subtotals."""
     path = os.path.join(output_dir, "faculty_summary.tex")
+    if groups is not None:
+        content = build_faculty_summary(
+            groups=[(name, _faculty_summary_entries(bs)) for name, bs in groups])
+    else:
+        content = build_faculty_summary(_faculty_summary_entries(budgets))
     with open(path, "w") as fh:
-        fh.write(build_faculty_summary(_faculty_summary_entries(budgets)))
+        fh.write(content)
     print(f"  wrote {os.path.relpath(path)}")
 
 
@@ -292,6 +301,7 @@ def run(input_dir: str, output_dir: str) -> None:
     all_budgets: List[Budget] = []
     all_files: List[str] = []
     all_just_paths: List[str] = []
+    group_budgets: List[Tuple[str, List[Budget]]] = []
 
     # Any loose files at the root are treated as their own group.
     pending = list(subgroups)
@@ -305,6 +315,7 @@ def run(input_dir: str, output_dir: str) -> None:
         merged, merged_tex_path, budgets, individual_paths, _combined = process_group(
             name, files, group_out, gprefix, file_stub=tex_prefix(name))
         group_merged.append((name, merged))
+        group_budgets.append((name, budgets))
         all_budgets.extend(budgets)
         all_files.extend(files)
         all_just_paths.extend(individual_paths)   # combined-per-program omitted
@@ -346,7 +357,7 @@ def run(input_dir: str, output_dir: str) -> None:
     print(f"  wrote {os.path.relpath(master_just)}")
     all_just_paths.append(master_just)
 
-    _write_faculty_summary(output_dir, all_budgets)
+    _write_faculty_summary(output_dir, groups=group_budgets)
     _write_pdf_driver(output_dir, all_just_paths)
     print(f"\nDone. Outputs written to {output_dir}/")
 

@@ -598,6 +598,24 @@ class JustificationContentTests(unittest.TestCase):
         # includable via the same guard as the justifications
         self.assertIn(r"\ifdefined\budgetjustificationincluded", tex)
 
+    def test_faculty_summary_grouped_by_thrust(self):
+        from utkbudget.justification import build_faculty_summary
+        tex = build_faculty_summary(groups=[
+            ("Energy Frontier", [("Dr. A", 100.0, 50.0, 150.0),
+                                 ("Dr. B", 10.0, 5.0, 15.0)]),
+            ("Theory_Frontier", [("Dr. C", 200.0, 100.0, 300.0)]),
+        ])
+        # group headings (escaped) with the PIs indented beneath them
+        self.assertIn(r"\multicolumn{4}{l}{\textbf{Energy Frontier}}", tex)
+        self.assertIn(r"\multicolumn{4}{l}{\textbf{Theory\_Frontier}}", tex)
+        self.assertIn(r"\quad Dr. A & \$100.00 & \$50.00 & \$150.00 \\", tex)
+        # per-thrust subtotal = sum over that sub-folder
+        self.assertIn(r"\textit{Energy Frontier subtotal} & \textit{\$110.00} & "
+                      r"\textit{\$55.00} & \textit{\$165.00} \\", tex)
+        # grand total across all thrusts
+        self.assertIn(r"\textbf{Total} & \textbf{\$310.00} & \textbf{\$155.00} & "
+                      r"\textbf{\$465.00} \\", tex)
+
 
 class CliJustificationTests(unittest.TestCase):
     def test_justifications_input_shared_defs_and_driver(self):

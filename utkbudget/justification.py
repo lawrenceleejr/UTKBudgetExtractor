@@ -486,21 +486,32 @@ def build_pdf_driver(justifications: Sequence[str], title: str = "Budget Justifi
     return "\n".join(lines) + "\n"
 
 
-def build_faculty_summary(entries, title: str = "DOE Budget Request by Faculty") -> str:
+def build_faculty_summary(entries=None, title: str = "DOE Budget Request by Faculty",
+                          groups=None) -> str:
     """A summary table -- one row per faculty with their final DOE ask -- meant
     to be ``\\input`` into a larger document.
 
-    ``entries`` is a list of ``(faculty_name, direct, indirect, total)`` with the
-    dollar figures as numbers; the total row is the column sums.  Uses only plain
-    ``\\hline`` rules so it drops into any document with no extra packages, and
-    the same ``\\ifdefined\\budgetjustificationincluded`` guard as the
-    justifications so it also compiles on its own."""
+    Flat form: ``entries`` is a list of ``(faculty_name, direct, indirect,
+    total)`` with the dollar figures as numbers.
+
+    Grouped form (multi-thrust proposals): ``groups`` is a list of
+    ``(group_name, entries)`` -- one block per input sub-folder (e.g. ``Energy
+    Frontier``, ``Intensity Frontier``, ``Theory Frontier``).  Each block gets a
+    bold group heading, its PIs indented beneath it, and a subtotal row summed
+    over that sub-folder; a grand total closes the table.
+
+    Uses only plain ``\\hline`` rules so it drops into any document with no
+    extra packages, and the same ``\\ifdefined\\budgetjustificationincluded``
+    guard as the justifications so it also compiles on its own."""
     def money(x):
         return f"\\${x:,.2f}"
 
-    td = sum(e[1] for e in entries)
-    ti = sum(e[2] for e in entries)
-    tt = sum(e[3] for e in entries)
+    if groups is None:
+        groups = [(None, list(entries))]
+    all_entries = [e for _, es in groups for e in es]
+    td = sum(e[1] for e in all_entries)
+    ti = sum(e[2] for e in all_entries)
+    tt = sum(e[3] for e in all_entries)
 
     out = [provenance_comment()]
     out.append(
@@ -516,10 +527,23 @@ def build_faculty_summary(entries, title: str = "DOE Budget Request by Faculty")
     lines = ["\\begin{center}", "\\begin{tabular}{lrrr}", "\\hline",
              "Faculty & Direct Costs & Indirect (F\\&A) & Total Requested \\\\",
              "\\hline"]
-    for name, direct, indirect, total in entries:
-        lines.append(f"{escape_tex(str(name))} & {money(direct)} & "
-                     f"{money(indirect)} & {money(total)} \\\\")
-    lines.append("\\hline")
+    for gname, es in groups:
+        indent = "\\quad " if gname is not None else ""
+        if gname is not None:
+            lines.append(f"\\multicolumn{{4}}{{l}}{{\\textbf{{{escape_tex(str(gname))}}}}} \\\\")
+        for name, direct, indirect, total in es:
+            lines.append(f"{indent}{escape_tex(str(name))} & {money(direct)} & "
+                         f"{money(indirect)} & {money(total)} \\\\")
+        if gname is not None:
+            gd = sum(e[1] for e in es)
+            gi = sum(e[2] for e in es)
+            gt = sum(e[3] for e in es)
+            lines.append(f"\\textit{{{escape_tex(str(gname))} subtotal}} & "
+                         f"\\textit{{{money(gd)}}} & \\textit{{{money(gi)}}} & "
+                         f"\\textit{{{money(gt)}}} \\\\")
+            lines.append("\\hline")
+    if groups[-1][0] is None:
+        lines.append("\\hline")
     lines.append(f"\\textbf{{Total}} & \\textbf{{{money(td)}}} & "
                  f"\\textbf{{{money(ti)}}} & \\textbf{{{money(tt)}}} \\\\")
     lines.append("\\hline")
