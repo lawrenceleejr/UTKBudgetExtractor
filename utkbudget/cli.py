@@ -28,7 +28,7 @@ import textwrap
 from typing import List, Tuple
 
 from .extractor import Budget, extract_budget
-from .justification import build_pdf_driver, write_document
+from .justification import build_faculty_summary, build_pdf_driver, write_document
 from .merge import (MergeIssue, RowOverflow, ValueConflict, merge_budgets,
                     write_merged_workbook)
 from .texdefs import escape_tex, tex_prefix, write_defs
@@ -221,6 +221,38 @@ def process_group(name: str, files: List[str], out_dir: str,
             individual_paths, just_path)
 
 
+def _faculty_summary_entries(budgets: List[Budget]):
+    """(faculty name, direct, indirect, total) for each budget, for the summary
+    table -- one row per faculty with their final DOE ask."""
+    def val(b: Budget, name: str) -> float:
+        v = b.get(name)
+        try:
+            return float(v) if v not in (None, "") else 0.0
+        except (TypeError, ValueError):
+            return 0.0
+
+    return [(_pi_name(b) or "(unnamed)",
+             val(b, "DirectTotal"), val(b, "IndirectTotal"), val(b, "GrandTotal"))
+            for b in budgets]
+
+
+def _write_faculty_summary(output_dir: str, budgets: List[Budget] = None,
+                           groups: List[Tuple[str, List[Budget]]] = None) -> None:
+    """Write ``faculty_summary.tex`` -- a one-row-per-faculty request table.
+
+    Pass ``budgets`` for a flat table, or ``groups`` (``(sub-folder name,
+    budgets)`` pairs) to group the PIs by thrust with per-thrust subtotals."""
+    path = os.path.join(output_dir, "faculty_summary.tex")
+    if groups is not None:
+        content = build_faculty_summary(
+            groups=[(name, _faculty_summary_entries(bs)) for name, bs in groups])
+    else:
+        content = build_faculty_summary(_faculty_summary_entries(budgets))
+    with open(path, "w") as fh:
+        fh.write(content)
+    print(f"  wrote {os.path.relpath(path)}")
+
+
 def _write_pdf_driver(output_dir: str, just_paths: List[str]) -> None:
     """Write ``all_justifications.tex`` -- a driver that compiles every
     justification into a single PDF -- and print the compile command."""
@@ -254,8 +286,9 @@ def run(input_dir: str, output_dir: str) -> None:
         # ---- Flat mode: a single folder of spreadsheets ----------------
         if not root_files:
             sys.exit(f"error: no .xlsx files found in {input_dir}")
-        _, _, _, individual_paths, combined_path = process_group(
+        _, _, budgets, individual_paths, combined_path = process_group(
             "All Budgets", root_files, output_dir, GRAND_PREFIX)
+        _write_faculty_summary(output_dir, budgets)
         _write_pdf_driver(output_dir, individual_paths + [combined_path])
         print(f"\nDone. Outputs written to {output_dir}/")
         return
@@ -268,6 +301,7 @@ def run(input_dir: str, output_dir: str) -> None:
     all_budgets: List[Budget] = []
     all_files: List[str] = []
     all_just_paths: List[str] = []
+    group_budgets: List[Tuple[str, List[Budget]]] = []
 
     # Any loose files at the root are treated as their own group.
     pending = list(subgroups)
@@ -281,6 +315,7 @@ def run(input_dir: str, output_dir: str) -> None:
         merged, merged_tex_path, budgets, individual_paths, _combined = process_group(
             name, files, group_out, gprefix, file_stub=tex_prefix(name))
         group_merged.append((name, merged))
+        group_budgets.append((name, budgets))
         all_budgets.extend(budgets)
         all_files.extend(files)
         all_just_paths.extend(individual_paths)   # combined-per-program omitted
@@ -322,6 +357,7 @@ def run(input_dir: str, output_dir: str) -> None:
     print(f"  wrote {os.path.relpath(master_just)}")
     all_just_paths.append(master_just)
 
+    _write_faculty_summary(output_dir, groups=group_budgets)
     _write_pdf_driver(output_dir, all_just_paths)
     print(f"\nDone. Outputs written to {output_dir}/")
 

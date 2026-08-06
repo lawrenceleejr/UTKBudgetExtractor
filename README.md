@@ -22,6 +22,12 @@ and it produces, for **every** input file:
    summed budget.
 6. **A driver** (`all_justifications.tex`) that compiles **every** justification
    into a single PDF.
+7. **A faculty summary table** (`faculty_summary.tex`) — one row per faculty
+   with their direct, indirect, and total DOE ask (and a grand-total row), ready
+   to `\input` into a larger document. With program sub-folders (a multi-thrust
+   proposal, e.g. `Energy Frontier/`, `Intensity Frontier/`, `Theory
+   Frontier/`), the PIs are grouped under each sub-folder's name with a
+   per-thrust subtotal.
 
 ## Install
 
@@ -57,7 +63,8 @@ output/
 ├── merged.xlsx                  # Smith + Jones, summed
 ├── merged.tex                   # \newcommand defs for the sum
 ├── justification.tex            # combined-total justification (the sum)
-└── all_justifications.tex       # compiles every justification into one PDF
+├── all_justifications.tex       # compiles every justification into one PDF
+└── faculty_summary.tex          # one-row-per-faculty request table
 ```
 
 ### Folder with program sub-folders
@@ -94,7 +101,8 @@ output/
 ├── merged.xlsx              # fully merged across every program
 ├── merged.tex               # defs for the grand total
 ├── justification.tex        # per-program + fully merged grand total
-└── all_justifications.tex   # compiles every justification into one PDF
+├── all_justifications.tex   # compiles every justification into one PDF
+└── faculty_summary.tex      # PIs grouped by program, per-program subtotals
 ```
 
 ## Including justifications
@@ -179,6 +187,12 @@ that ship with the template and are never touched.
 > times, so a consolidated total can differ from the naive sum of the separately
 > rounded inputs by a few dollars (the consolidated figure is the more accurate
 > one). Non-rounded categories match to the cent.
+
+- **Final numbers are rounded to the nearest dollar.** Every figure the tool
+  *produces* — the TeX macro values, the summary tables, and the derived dollar
+  values written into the merged workbook (consolidated travel, supplies, and
+  summed manual rows) — is rounded to the nearest whole dollar. Values *copied*
+  from the inputs (base salaries, equipment amounts, ...) are never altered.
 - **Workbook-wide inputs are checked for conflicts.** Some inputs cannot be
   summed — the salary/tuition inflation rates, the F&A base and rate type, and
   the per-GRA tuition/fee costs apply to the whole workbook. The merge carries

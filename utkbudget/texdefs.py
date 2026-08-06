@@ -18,6 +18,7 @@ from .extractor import (
     KIND_MONEY,
     KIND_MONTHS,
     KIND_RATE,
+    round_dollar,
 )
 from .provenance import provenance_lines
 
@@ -60,11 +61,12 @@ def format_value(field) -> str:
 
     if value is None or value == "":
         # Empty money/rate cells read more naturally as zero in prose.
-        return "0.00" if kind in (KIND_MONEY,) else ""
+        return "0" if kind in (KIND_MONEY,) else ""
 
     if kind == KIND_MONEY:
+        # Final dollar figures are rounded to the nearest whole dollar.
         try:
-            return "{:,.2f}".format(float(value))
+            return "{:,}".format(round_dollar(float(value)))
         except (TypeError, ValueError):
             return escape_tex(str(value))
 

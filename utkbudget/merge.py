@@ -247,8 +247,12 @@ def _collect_consolidatable(value_sheets, rows):
 def _agg_months(group, weight_by_base=False):
     out = {}
     for c in PERSON_MONTH_COLS:
-        out[c] = sum((e["D"] if weight_by_base else 1.0) * e["E"] * e["months"][c]
-                     for e in group)
+        total = sum((e["D"] if weight_by_base else 1.0) * e["E"] * e["months"][c]
+                    for e in group)
+        # weight_by_base sums are dollars (base x headcount x months against a
+        # $1 base), so round them like every other derived dollar figure; plain
+        # month sums stay fractional (2.5 months is meaningful).
+        out[c] = X.round_dollar(total) if weight_by_base else total
     return out
 
 
@@ -426,11 +430,11 @@ def _consolidate_travel(ws_t, value_sheets) -> None:
             _set(ws_t, r, "C", "Various")
             _set(ws_t, r, "D", 1)   # days   (>0 so the row's total is not blocked)
             _set(ws_t, r, "E", 1)   # travelers
-            _set(ws_t, r, "F", reg or None)
-            _set(ws_t, r, "G", air or None)
-            _set(ws_t, r, "H", add or None)
-            _set(ws_t, r, "I", lodg or None)
-            _set(ws_t, r, "J", perd or None)
+            _set(ws_t, r, "F", X.round_dollar(reg) or None)
+            _set(ws_t, r, "G", X.round_dollar(air) or None)
+            _set(ws_t, r, "H", X.round_dollar(add) or None)
+            _set(ws_t, r, "I", X.round_dollar(lodg) or None)
+            _set(ws_t, r, "J", X.round_dollar(perd) or None)
 
 
 # SUPPLIES: entry rows 3-37 (A=description, B-F = per-period dollar amounts).
@@ -468,7 +472,7 @@ def _consolidate_supplies(ws_t, value_sheets) -> Optional[RowOverflow]:
         if line["A"] is not None:
             _set(ws_t, r, "A", line["A"])
         for c in SUPPLIES_PERIOD_COLS:
-            _set(ws_t, r, c, line["sums"][c] or None)
+            _set(ws_t, r, c, X.round_dollar(line["sums"][c]) or None)
 
     if len(lines) > capacity:
         dropped = [str(l["A"] or "(unlabeled)") for l in lines[capacity:]]
@@ -532,10 +536,12 @@ GLOBAL_INPUT_CELLS = [
 
 
 def _sum_cells(ws_t, value_sheets, rows, cols) -> None:
+    """Sum manually-entered dollar cells across the inputs (derived figures, so
+    rounded to the nearest dollar like all other final numbers)."""
     for r in rows:
         for c in cols:
             total = sum(_num(vs[f"{c}{r}"].value) for vs in value_sheets)
-            _set(ws_t, r, c, total)
+            _set(ws_t, r, c, X.round_dollar(total))
 
 
 def _has_gra_months(vs) -> bool:

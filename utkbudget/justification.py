@@ -17,7 +17,7 @@ from __future__ import annotations
 import datetime as _dt
 from typing import List, Sequence, Tuple
 
-from .extractor import PERIOD_WORDS
+from .extractor import PERIOD_WORDS, round_dollar
 from .provenance import provenance_comment
 from .texdefs import escape_tex
 
@@ -484,6 +484,79 @@ def build_pdf_driver(justifications: Sequence[str], title: str = "Budget Justifi
         lines.append("\\clearpage")
     lines.append("\\end{document}")
     return "\n".join(lines) + "\n"
+
+
+def build_faculty_summary(entries=None, title: str = "DOE Budget Request by Faculty",
+                          groups=None) -> str:
+    """A summary table -- one row per faculty with their final DOE ask -- meant
+    to be ``\\input`` into a larger document.
+
+    Flat form: ``entries`` is a list of ``(faculty_name, direct, indirect,
+    total)`` with the dollar figures as numbers.
+
+    Grouped form (multi-thrust proposals): ``groups`` is a list of
+    ``(group_name, entries)`` -- one block per input sub-folder (e.g. ``Energy
+    Frontier``, ``Intensity Frontier``, ``Theory Frontier``).  Each block gets a
+    bold group heading, its PIs indented beneath it, and a subtotal row summed
+    over that sub-folder; a grand total closes the table.
+
+    Uses only plain ``\\hline`` rules so it drops into any document with no
+    extra packages, and the same ``\\ifdefined\\budgetjustificationincluded``
+    guard as the justifications so it also compiles on its own."""
+    def money(x):
+        return f"\\${x:,}"
+
+    if groups is None:
+        groups = [(None, list(entries))]
+    # Round every figure to the nearest dollar ONCE, up front, so each
+    # subtotal/total is the sum of the rounded rows it prints above it (rounding
+    # only at display time could leave a total a dollar off its own column).
+    groups = [(g, [(n, round_dollar(d), round_dollar(i), round_dollar(t))
+                   for n, d, i, t in es]) for g, es in groups]
+    all_entries = [e for _, es in groups for e in es]
+    td = sum(e[1] for e in all_entries)
+    ti = sum(e[2] for e in all_entries)
+    tt = sum(e[3] for e in all_entries)
+
+    out = [provenance_comment()]
+    out.append(
+        "% Summary table: one row per faculty with their DOE request.  Compiles\n"
+        "% on its own; to \\input it into a larger document, put\n"
+        "% \\def\\budgetjustificationincluded{} in that document's preamble first.")
+    out.append(
+        f"\\ifdefined{INCLUDE_GUARD}\\else\n"
+        + PREAMBLE
+        + f"\\title{{{escape_tex(title)}}}\n"
+        + "\\begin{document}\n\\maketitle\n\\fi")
+
+    lines = ["\\begin{center}", "\\begin{tabular}{lrrr}", "\\hline",
+             "Faculty & Direct Costs & Indirect (F\\&A) & Total Requested \\\\",
+             "\\hline"]
+    for gname, es in groups:
+        indent = "\\quad " if gname is not None else ""
+        if gname is not None:
+            lines.append(f"\\multicolumn{{4}}{{l}}{{\\textbf{{{escape_tex(str(gname))}}}}} \\\\")
+        for name, direct, indirect, total in es:
+            lines.append(f"{indent}{escape_tex(str(name))} & {money(direct)} & "
+                         f"{money(indirect)} & {money(total)} \\\\")
+        if gname is not None:
+            gd = sum(e[1] for e in es)
+            gi = sum(e[2] for e in es)
+            gt = sum(e[3] for e in es)
+            lines.append(f"\\textit{{{escape_tex(str(gname))} subtotal}} & "
+                         f"\\textit{{{money(gd)}}} & \\textit{{{money(gi)}}} & "
+                         f"\\textit{{{money(gt)}}} \\\\")
+            lines.append("\\hline")
+    if groups[-1][0] is None:
+        lines.append("\\hline")
+    lines.append(f"\\textbf{{Total}} & \\textbf{{{money(td)}}} & "
+                 f"\\textbf{{{money(ti)}}} & \\textbf{{{money(tt)}}} \\\\")
+    lines.append("\\hline")
+    lines += ["\\end{tabular}", "\\end{center}"]
+    out.append("\n".join(lines))
+
+    out.append(f"\\ifdefined{INCLUDE_GUARD}\\else\n\\end{{document}}\n\\fi")
+    return "\n\n".join(out) + "\n"
 
 
 def write_document(path: str, *args, **kwargs) -> str:
