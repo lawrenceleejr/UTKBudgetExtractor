@@ -17,7 +17,7 @@ from __future__ import annotations
 import datetime as _dt
 from typing import List, Sequence, Tuple
 
-from .extractor import PERIOD_WORDS
+from .extractor import PERIOD_WORDS, round_dollar
 from .provenance import provenance_comment
 from .texdefs import escape_tex
 
@@ -504,10 +504,15 @@ def build_faculty_summary(entries=None, title: str = "DOE Budget Request by Facu
     extra packages, and the same ``\\ifdefined\\budgetjustificationincluded``
     guard as the justifications so it also compiles on its own."""
     def money(x):
-        return f"\\${x:,.2f}"
+        return f"\\${x:,}"
 
     if groups is None:
         groups = [(None, list(entries))]
+    # Round every figure to the nearest dollar ONCE, up front, so each
+    # subtotal/total is the sum of the rounded rows it prints above it (rounding
+    # only at display time could leave a total a dollar off its own column).
+    groups = [(g, [(n, round_dollar(d), round_dollar(i), round_dollar(t))
+                   for n, d, i, t in es]) for g, es in groups]
     all_entries = [e for _, es in groups for e in es]
     td = sum(e[1] for e in all_entries)
     ti = sum(e[2] for e in all_entries)

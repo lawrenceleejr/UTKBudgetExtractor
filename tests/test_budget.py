@@ -478,10 +478,19 @@ class TexTests(unittest.TestCase):
 
     def test_format_value(self):
         from utkbudget.extractor import Field, KIND_MONEY, KIND_RATE, KIND_TEXT
-        self.assertEqual(format_value(Field("x", 1234.5, KIND_MONEY)), "1,234.50")
-        self.assertEqual(format_value(Field("x", None, KIND_MONEY)), "0.00")
+        # Money renders rounded to the nearest whole dollar (half rounds up).
+        self.assertEqual(format_value(Field("x", 1234.5, KIND_MONEY)), "1,235")
+        self.assertEqual(format_value(Field("x", 1234.49, KIND_MONEY)), "1,234")
+        self.assertEqual(format_value(Field("x", None, KIND_MONEY)), "0")
         self.assertEqual(format_value(Field("x", 53.5, KIND_RATE)), "53.5")
         self.assertEqual(format_value(Field("x", "A & B", KIND_TEXT)), r"A \& B")
+
+    def test_round_dollar(self):
+        from utkbudget.extractor import round_dollar
+        self.assertEqual(round_dollar(10.49), 10)
+        self.assertEqual(round_dollar(10.50), 11)
+        self.assertEqual(round_dollar(10.0), 10)
+        self.assertEqual(round_dollar(0), 0)
 
     def test_defs_and_document_macros_match(self):
         tmp = tempfile.mkdtemp()
@@ -589,14 +598,24 @@ class JustificationContentTests(unittest.TestCase):
         from utkbudget.justification import build_faculty_summary
         tex = build_faculty_summary([("Dr. A", 100.0, 50.0, 150.0),
                                      ("R_D Lab", 200.0, 100.0, 300.0)])
-        # one row per faculty with their figures
-        self.assertIn(r"Dr. A & \$100.00 & \$50.00 & \$150.00 \\", tex)
-        self.assertIn(r"R\_D Lab & \$200.00 & \$100.00 & \$300.00 \\", tex)  # escaped
+        # one row per faculty with their figures, rounded to whole dollars
+        self.assertIn(r"Dr. A & \$100 & \$50 & \$150 \\", tex)
+        self.assertIn(r"R\_D Lab & \$200 & \$100 & \$300 \\", tex)  # escaped
         # total row = column sums
-        self.assertIn(r"\textbf{Total} & \textbf{\$300.00} & \textbf{\$150.00} & "
-                      r"\textbf{\$450.00} \\", tex)
+        self.assertIn(r"\textbf{Total} & \textbf{\$300} & \textbf{\$150} & "
+                      r"\textbf{\$450} \\", tex)
         # includable via the same guard as the justifications
         self.assertIn(r"\ifdefined\budgetjustificationincluded", tex)
+
+    def test_faculty_summary_totals_consistent_after_rounding(self):
+        from utkbudget.justification import build_faculty_summary
+        # Rows are rounded once at ingestion, so the printed total equals the
+        # sum of the printed rows ($10 + $10 = $20), not round(10.4 + 10.4) = 21.
+        tex = build_faculty_summary([("A", 10.4, 0.0, 10.4),
+                                     ("B", 10.4, 0.0, 10.4)])
+        self.assertIn(r"A & \$10 & \$0 & \$10 \\", tex)
+        self.assertIn(r"\textbf{\$20}", tex)
+        self.assertNotIn(r"\$21", tex)
 
     def test_faculty_summary_grouped_by_thrust(self):
         from utkbudget.justification import build_faculty_summary
@@ -608,13 +627,13 @@ class JustificationContentTests(unittest.TestCase):
         # group headings (escaped) with the PIs indented beneath them
         self.assertIn(r"\multicolumn{4}{l}{\textbf{Energy Frontier}}", tex)
         self.assertIn(r"\multicolumn{4}{l}{\textbf{Theory\_Frontier}}", tex)
-        self.assertIn(r"\quad Dr. A & \$100.00 & \$50.00 & \$150.00 \\", tex)
+        self.assertIn(r"\quad Dr. A & \$100 & \$50 & \$150 \\", tex)
         # per-thrust subtotal = sum over that sub-folder
-        self.assertIn(r"\textit{Energy Frontier subtotal} & \textit{\$110.00} & "
-                      r"\textit{\$55.00} & \textit{\$165.00} \\", tex)
+        self.assertIn(r"\textit{Energy Frontier subtotal} & \textit{\$110} & "
+                      r"\textit{\$55} & \textit{\$165} \\", tex)
         # grand total across all thrusts
-        self.assertIn(r"\textbf{Total} & \textbf{\$310.00} & \textbf{\$155.00} & "
-                      r"\textbf{\$465.00} \\", tex)
+        self.assertIn(r"\textbf{Total} & \textbf{\$310} & \textbf{\$155} & "
+                      r"\textbf{\$465} \\", tex)
 
 
 class CliJustificationTests(unittest.TestCase):

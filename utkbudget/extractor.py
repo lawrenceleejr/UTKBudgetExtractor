@@ -14,6 +14,7 @@ summed when several budgets are merged.
 
 from __future__ import annotations
 
+import math
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Optional
@@ -121,6 +122,15 @@ RATE_COL = "F"
 # ---------------------------------------------------------------------------
 
 # Field "kinds" understood by the formatter / merger.
+def round_dollar(x: float) -> int:
+    """Round a dollar amount to the nearest whole dollar (half rounds up).
+
+    The single rounding rule for every *final* number the tool produces -- TeX
+    macro values, summary tables, and the derived dollar figures written into
+    the merged workbook.  Copied user inputs are never rounded."""
+    return int(math.floor(float(x) + 0.5))
+
+
 KIND_MONEY = "money"   # dollar amount; summed on merge
 KIND_RATE = "rate"     # percentage (stored as a percent, e.g. 35.0)
 KIND_MONTHS = "months"  # person-months (a small float)
