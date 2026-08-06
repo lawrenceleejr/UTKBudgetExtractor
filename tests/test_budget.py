@@ -663,7 +663,9 @@ class JustificationContentTests(unittest.TestCase):
             "justification": build_document(
                 "Budget Justification", ["defs.tex"],
                 [("X", b, None, False, True)], subtitle="Dr. A"),
-            "driver": build_pdf_driver(["a_justification.tex", "b_justification.tex"]),
+            "driver": build_pdf_driver(
+                ["a_justification.tex", "b_justification.tex"],
+                summaries=[("Budget Request by Faculty", "faculty_summary.tex")]),
             "summary": build_faculty_summary([("Dr. A", 1.0, 2.0, 3.0)]),
             "by_year": build_faculty_summary_by_year([("Dr. A", [1.0, 2.0])]),
         }
@@ -785,6 +787,17 @@ class CliJustificationTests(unittest.TestCase):
                       driver_text)
         # No \usepackage in the body -- illegal once included in a parent.
         self.assertNotIn(r"\usepackage{import}", driver_text)
+        # Reading order: both summary tables at the very top, then the combined
+        # justification, then the individual ones.
+        order = [driver_text.index(needle) for needle in (
+            r"\input{\budgetjustificationpath faculty_summary}",
+            r"\input{\budgetjustificationpath faculty_summary_by_year}",
+            r"\input{\budgetjustificationpath justification}",
+            r"\input{\budgetjustificationpath PI_Smith_justification}")]
+        self.assertEqual(order, sorted(order), "driver sections are out of order")
+        # The summaries get headings here (the summary files emit none themselves).
+        self.assertIn(r"\section*{Budget Request by Faculty}", driver_text)
+        self.assertIn(r"\section*{Budget Request by Faculty and Year}", driver_text)
 
         # The combined justification carries the summed budget.
         with open(combined) as fh:

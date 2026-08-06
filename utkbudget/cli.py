@@ -41,6 +41,13 @@ from .texdefs import escape_tex, tex_prefix, write_defs
 
 GRAND_PREFIX = "Combined"
 
+# The at-a-glance request tables, as (filename, heading).  Written by
+# _write_faculty_summary and \input at the very top of all_justifications.tex.
+SUMMARY_TABLES = (
+    ("faculty_summary.tex", "Budget Request by Faculty"),
+    ("faculty_summary_by_year.tex", "Budget Request by Faculty and Year"),
+)
+
 
 def warn_merge_issues(context: str, xlsx_path: str,
                       issues: List[MergeIssue]) -> None:
@@ -284,10 +291,10 @@ def _write_faculty_summary(output_dir: str, budgets: List[Budget] = None,
 
     Pass ``budgets`` for flat tables, or ``groups`` (``(sub-folder name,
     budgets)`` pairs) to group the PIs by thrust with per-thrust subtotals."""
-    for fname, build, rows in (
-            ("faculty_summary.tex", build_faculty_summary, _faculty_summary_entries),
-            ("faculty_summary_by_year.tex", build_faculty_summary_by_year,
-             _faculty_year_entries)):
+    for (fname, _heading), build, rows in zip(
+            SUMMARY_TABLES,
+            (build_faculty_summary, build_faculty_summary_by_year),
+            (_faculty_summary_entries, _faculty_year_entries)):
         if groups is not None:
             content = build(groups=[(name, rows(bs)) for name, bs in groups])
         else:
@@ -299,12 +306,16 @@ def _write_faculty_summary(output_dir: str, budgets: List[Budget] = None,
 
 
 def _write_pdf_driver(output_dir: str, just_paths: List[str]) -> None:
-    """Write ``all_justifications.tex`` -- a driver that compiles every
-    justification into a single PDF -- and print the compile command."""
+    """Write ``all_justifications.tex`` -- the summary tables, then every
+    justification -- and print the compile command.
+
+    ``just_paths`` is already in reading order: the combined/all-programs
+    justification first, then the individual ones."""
     rel = [os.path.basename(p) for p in just_paths]   # all in one flat directory
     driver = os.path.join(output_dir, "all_justifications.tex")
     with open(driver, "w") as fh:
-        fh.write(build_pdf_driver(rel))
+        fh.write(build_pdf_driver(
+            rel, summaries=[(heading, fname) for fname, heading in SUMMARY_TABLES]))
     print(f"  wrote {os.path.relpath(driver)}")
     print("\n  Compile every justification into one PDF with:")
     print(f"    latexmk -pdf -cd {os.path.join(output_dir, 'all_justifications.tex')}")
@@ -334,7 +345,8 @@ def run(input_dir: str, output_dir: str) -> None:
         _, _, budgets, individual_paths, combined_path = process_group(
             "All Budgets", root_files, output_dir, GRAND_PREFIX)
         _write_faculty_summary(output_dir, budgets)
-        _write_pdf_driver(output_dir, individual_paths + [combined_path])
+        # Combined first, then the individual justifications.
+        _write_pdf_driver(output_dir, [combined_path] + individual_paths)
         print(f"\nDone. Outputs written to {output_dir}/")
         return
 
@@ -397,15 +409,14 @@ def run(input_dir: str, output_dir: str) -> None:
             "This master justification covers the full request to the U.S. "
             "Department of Energy across all programs. A justification is provided "
             "for each program, followed by a justification of the fully merged "
-            "total. Per-file justifications are available in each program's "
-            "sub-folder."
+            "total. Per-investigator justifications follow."
         ),
     )
     print(f"  wrote {os.path.relpath(master_just)}")
-    all_just_paths.append(master_just)
 
     _write_faculty_summary(output_dir, groups=group_budgets)
-    _write_pdf_driver(output_dir, all_just_paths)
+    # All-programs combined section first, then the individual justifications.
+    _write_pdf_driver(output_dir, [master_just] + all_just_paths)
     print(f"\nDone. Outputs written to {output_dir}/")
 
 
