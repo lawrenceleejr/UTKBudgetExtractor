@@ -617,6 +617,69 @@ class JustificationContentTests(unittest.TestCase):
         self.assertIn(r"\textbf{\$20}", tex)
         self.assertNotIn(r"\$21", tex)
 
+    def test_include_guard_both_modes(self):
+        """Every generated .tex must emit a full document standalone and a bare
+        body when included -- so simulate TeX's \\ifdefined/\\def and check."""
+        import re
+        from utkbudget.justification import (build_document, build_pdf_driver,
+                                             build_faculty_summary,
+                                             build_faculty_summary_by_year)
+        GUARD = r"\budgetjustificationincluded"
+
+        def expand(text, defined):
+            text = re.sub(r"(?<!\\)%.*", "", text)   # comments are not tokens
+            out = []
+            tok = re.compile(r"\\ifdefined(\\[A-Za-z]+)|\\else|\\fi|"
+                             r"\\(?:def|providecommand)\{?(\\[A-Za-z]+)\}?\{\}")
+
+            def parse(i, emit):
+                while i < len(text):
+                    m = tok.search(text, i)
+                    if not m:
+                        if emit:
+                            out.append(text[i:])
+                        return len(text), None
+                    if emit:
+                        out.append(text[i:m.start()])
+                    i, kind = m.end(), m.group(0)
+                    if kind.startswith(r"\ifdefined"):
+                        cond = m.group(1) in defined
+                        i, closed = parse(i, emit and cond)
+                        if closed == "else":
+                            i, _ = parse(i, emit and not cond)
+                    elif kind == r"\else":
+                        return i, "else"
+                    elif kind == r"\fi":
+                        return i, "fi"
+                    elif emit:
+                        defined.add(m.group(2))
+                return i, None
+
+            parse(0, True)
+            return "".join(out)
+
+        b = self._budget()
+        files = {
+            "justification": build_document(
+                "Budget Justification", ["defs.tex"],
+                [("X", b, None, False, True)], subtitle="Dr. A"),
+            "driver": build_pdf_driver(["a_justification.tex", "b_justification.tex"]),
+            "summary": build_faculty_summary([("Dr. A", 1.0, 2.0, 3.0)]),
+            "by_year": build_faculty_summary_by_year([("Dr. A", [1.0, 2.0])]),
+        }
+        for name, text in files.items():
+            alone = expand(text, set())
+            for k in (r"\documentclass", r"\begin{document}", r"\end{document}"):
+                self.assertEqual(alone.count(k), 1, f"{name} standalone: {k}")
+            included = expand(text, {GUARD})
+            for k in (r"\documentclass", r"\begin{document}", r"\end{document}",
+                      r"\usepackage"):
+                self.assertEqual(included.count(k), 0,
+                                 f"{name} included: {k} must not be emitted")
+        # Standalone, the driver must define the guard before pulling children in.
+        drv = re.sub(r"(?<!\\)%.*", "", files["driver"])
+        self.assertLess(drv.index(r"\def" + GUARD + "{}"), drv.index(r"\input{"))
+
     def test_faculty_summary_by_year(self):
         from utkbudget.justification import build_faculty_summary_by_year
         tex = build_faculty_summary_by_year([
