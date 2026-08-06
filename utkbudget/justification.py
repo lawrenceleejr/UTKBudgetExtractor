@@ -398,6 +398,31 @@ def render_section(prefix: str, budget=None, heading=None,
 
 INCLUDE_GUARD = r"\budgetjustificationincluded"
 
+# Prefix prepended to every generated \input.  Empty by default (all generated
+# files live in one flat directory, so bare names resolve when the document is
+# compiled from there).  A parent document in a *different* directory can set it
+# once -- \def\budgetjustificationpath{output/} -- and every nested \input
+# follows, because TeX resolves relative \input paths against the main
+# document's directory rather than the included file's.
+PATH_MACRO = r"\budgetjustificationpath"
+
+# Set only by a file that opened \begin{document} itself, so it knows to close
+# it.  The include guard cannot serve double duty here: a standalone driver
+# *defines* the guard (so the justifications it pulls in skip their preambles),
+# which would otherwise make it look included to itself.
+STANDALONE_MARKER = r"\budgetjustificationstandalone"
+
+
+def _path_preamble() -> str:
+    """Declare the \\input path prefix (harmless if the parent already set it)."""
+    return f"\\providecommand{{{PATH_MACRO}}}{{}}"
+
+
+def _input(rel: str) -> str:
+    """An ``\\input`` of a generated file, honouring the path prefix macro."""
+    base = rel[:-4] if rel.endswith(".tex") else rel   # strip .tex for \input
+    return f"\\input{{{PATH_MACRO} {base}}}"
+
 
 def build_document(
     title: str,
@@ -431,7 +456,10 @@ def build_document(
         "% compiles on its own (e.g. `pdflatex thisfile.tex`).  To \\input it into\n"
         "% a larger proposal instead, put  \\def\\budgetjustificationincluded{}  in\n"
         "% that document's preamble first; the preamble and\n"
-        "% \\begin{document}/\\end{document} below are then skipped automatically.")
+        "% \\begin{document}/\\end{document} below are then skipped automatically.\n"
+        "% If the parent document lives in a different directory, also set\n"
+        "% \\def\\budgetjustificationpath{output/} so the \\input below resolves.")
+    out.append(_path_preamble())
 
     titled = title_tex + (r"\\[4pt]{\large " + subtitle_tex + "}" if subtitle_tex else "")
     out.append(
@@ -445,8 +473,7 @@ def build_document(
 
     out.append("% --- budget definitions (the dedicated defs file) ---")
     for rel in defs_inputs:
-        base = rel[:-4] if rel.endswith(".tex") else rel  # strip .tex for \input
-        out.append(f"\\input{{{base}}}")
+        out.append(_input(rel))
 
     # When included there is no \maketitle, so print a heading identifying this
     # budget (kept out of standalone output, where the title block already shows).
@@ -463,27 +490,48 @@ def build_document(
     return "\n\n".join(out) + "\n"
 
 
-def build_pdf_driver(justifications: Sequence[str], title: str = "Budget Justifications") -> str:
-    """A standalone driver that compiles every justification into one PDF.
+def build_pdf_driver(justifications: Sequence[str],
+                     title: str = "Budget Justifications") -> str:
+    """A driver that pulls every justification into one document.
 
-    ``justifications`` are output-root-relative paths (e.g.
-    ``"ProgramOne/PI_Smith_justification.tex"``).  Each is pulled in with the
-    ``import`` package's ``\\subimport`` so that the ``\\input`` of its defs file
-    still resolves inside that file's own folder, and the include guard is
-    defined so their preambles are skipped."""
-    lines = [provenance_comment(), PREAMBLE.rstrip(),
-             "\\usepackage{import}",
-             f"\\def{INCLUDE_GUARD}{{}}",
-             f"\\title{{{escape_tex(title)}}}",
-             "\\begin{document}",
-             "\\maketitle", ""]
+    ``justifications`` are names of generated files in the same output directory.
+    Like the justifications and the summary tables, this file works BOTH ways:
+
+    * on its own -- ``latexmk -pdf all_justifications.tex`` -- it emits the
+      preamble, defines the include guard so each justification it pulls in skips
+      its own preamble, and closes the document;
+    * ``\\input`` into a larger proposal (which defines the guard in its own
+      preamble) -- it then emits no preamble and no ``\\end{document}``, just the
+      justifications one after another.
+
+    It therefore tracks whether *it* opened the document with its own marker
+    rather than reusing the include guard, which it may have defined itself."""
+    out = [provenance_comment()]
+    out.append(
+        "% Every justification, one after another.  Compiles on its own\n"
+        "% (`latexmk -pdf all_justifications.tex`).  To \\input it into a larger\n"
+        "% proposal, put  \\def\\budgetjustificationincluded{}  in that document's\n"
+        "% preamble; if it lives in a different directory, also set\n"
+        "% \\def\\budgetjustificationpath{output/} so the \\input{}s below resolve.")
+    out.append(_path_preamble())
+    out.append(
+        f"\\ifdefined{INCLUDE_GUARD}\\else\n"
+        + PREAMBLE
+        # Defined for the justifications pulled in below, so they skip their own
+        # preambles; the separate marker records that WE opened the document.
+        + f"\\def{INCLUDE_GUARD}{{}}\n"
+        + f"\\def{STANDALONE_MARKER}{{}}\n"
+        + f"\\title{{{escape_tex(title)}}}\n"
+        + "\\begin{document}\n"
+        + "\\maketitle\n"
+        + "\\fi")
+    body = []
     for rel in justifications:
-        rel = rel[:-4] if rel.endswith(".tex") else rel
-        subdir, _, name = rel.rpartition("/")
-        lines.append(f"\\subimport{{{subdir + '/' if subdir else './'}}}{{{name}}}")
-        lines.append("\\clearpage")
-    lines.append("\\end{document}")
-    return "\n".join(lines) + "\n"
+        body.append(_input(rel))
+        body.append("\\clearpage")
+    out.append("\n".join(body))
+    out.append(f"\\ifdefined{STANDALONE_MARKER}\n\\end{{document}}\n\\fi")
+    return "\n\n".join(out) + "\n"
 
 
 def build_faculty_summary(entries=None, title: str = "DOE Budget Request by Faculty",
@@ -551,6 +599,91 @@ def build_faculty_summary(entries=None, title: str = "DOE Budget Request by Facu
         lines.append("\\hline")
     lines.append(f"\\textbf{{Total}} & \\textbf{{{money(td)}}} & "
                  f"\\textbf{{{money(ti)}}} & \\textbf{{{money(tt)}}} \\\\")
+    lines.append("\\hline")
+    lines += ["\\end{tabular}", "\\end{center}"]
+    out.append("\n".join(lines))
+
+    out.append(f"\\ifdefined{INCLUDE_GUARD}\\else\n\\end{{document}}\n\\fi")
+    return "\n\n".join(out) + "\n"
+
+
+def build_faculty_summary_by_year(
+        entries=None, title: str = "DOE Budget Request by Faculty and Year",
+        groups=None) -> str:
+    """A summary table -- one row per faculty, one column per year -- so a program
+    manager can see each PI's ask per year at a glance.
+
+    Flat form: ``entries`` is a list of ``(faculty_name, [year1, year2, ...])``
+    with the per-period dollar figures as numbers.  Grouped form: ``groups`` is a
+    list of ``(group_name, entries)``, one block per input sub-folder, each with a
+    per-thrust subtotal row.  A "Total" row and a "Total Requested" column close
+    the table.
+
+    Only periods that carry money anywhere in the request get a column, so an
+    unfunded year 4/5 is not printed.  Same plain-``\\hline`` styling and
+    ``\\ifdefined`` guard as :func:`build_faculty_summary`."""
+    def money(x):
+        return f"\\${x:,}"
+
+    if groups is None:
+        groups = [(None, list(entries))]
+    # Round once, up front, so every subtotal/total equals the sum of the
+    # rounded figures printed around it (both down columns and across rows).
+    groups = [(g, [(n, [round_dollar(v) for v in years]) for n, years in es])
+              for g, es in groups]
+    all_entries = [e for _, es in groups for e in es]
+
+    width = max((len(years) for _, years in all_entries), default=len(PERIOD_WORDS))
+
+    def pad(years):
+        return list(years) + [0] * (width - len(years))
+
+    # Drop trailing periods that are unfunded across the whole request.
+    active = [i for i in range(width)
+              if any(pad(years)[i] for _, years in all_entries)]
+    if not active:
+        active = [0]
+    ncols = len(active)
+
+    def row(label, years, fmt="{}"):
+        cells = [fmt.format(money(pad(years)[i])) for i in active]
+        cells.append(fmt.format(money(sum(pad(years)))))
+        return f"{label} & " + " & ".join(cells) + " \\\\"
+
+    def col_sums(es):
+        return [sum(pad(years)[i] for _, years in es) for i in range(width)]
+
+    out = [provenance_comment()]
+    out.append(
+        "% Summary table: one row per faculty, one column per year, so the ask\n"
+        "% per year per PI is visible at a glance.  Compiles on its own; to\n"
+        "% \\input it into a larger document, put\n"
+        "% \\def\\budgetjustificationincluded{} in that document's preamble first.")
+    out.append(
+        f"\\ifdefined{INCLUDE_GUARD}\\else\n"
+        + PREAMBLE
+        + f"\\title{{{escape_tex(title)}}}\n"
+        + "\\begin{document}\n\\maketitle\n\\fi")
+
+    header = " & ".join(f"Year {i + 1}" for i in active)
+    lines = ["\\begin{center}",
+             "\\begin{tabular}{l" + "r" * (ncols + 1) + "}", "\\hline",
+             f"Faculty & {header} & Total Requested \\\\",
+             "\\hline"]
+    for gname, es in groups:
+        indent = "\\quad " if gname is not None else ""
+        if gname is not None:
+            lines.append(f"\\multicolumn{{{ncols + 2}}}{{l}}"
+                         f"{{\\textbf{{{escape_tex(str(gname))}}}}} \\\\")
+        for name, years in es:
+            lines.append(row(f"{indent}{escape_tex(str(name))}", years))
+        if gname is not None:
+            lines.append(row(f"\\textit{{{escape_tex(str(gname))} subtotal}}",
+                             col_sums(es), "\\textit{{{}}}"))
+            lines.append("\\hline")
+    if groups[-1][0] is None:
+        lines.append("\\hline")
+    lines.append(row("\\textbf{Total}", col_sums(all_entries), "\\textbf{{{}}}"))
     lines.append("\\hline")
     lines += ["\\end{tabular}", "\\end{center}"]
     out.append("\n".join(lines))

@@ -617,6 +617,101 @@ class JustificationContentTests(unittest.TestCase):
         self.assertIn(r"\textbf{\$20}", tex)
         self.assertNotIn(r"\$21", tex)
 
+    def test_include_guard_both_modes(self):
+        """Every generated .tex must emit a full document standalone and a bare
+        body when included -- so simulate TeX's \\ifdefined/\\def and check."""
+        import re
+        from utkbudget.justification import (build_document, build_pdf_driver,
+                                             build_faculty_summary,
+                                             build_faculty_summary_by_year)
+        GUARD = r"\budgetjustificationincluded"
+
+        def expand(text, defined):
+            text = re.sub(r"(?<!\\)%.*", "", text)   # comments are not tokens
+            out = []
+            tok = re.compile(r"\\ifdefined(\\[A-Za-z]+)|\\else|\\fi|"
+                             r"\\(?:def|providecommand)\{?(\\[A-Za-z]+)\}?\{\}")
+
+            def parse(i, emit):
+                while i < len(text):
+                    m = tok.search(text, i)
+                    if not m:
+                        if emit:
+                            out.append(text[i:])
+                        return len(text), None
+                    if emit:
+                        out.append(text[i:m.start()])
+                    i, kind = m.end(), m.group(0)
+                    if kind.startswith(r"\ifdefined"):
+                        cond = m.group(1) in defined
+                        i, closed = parse(i, emit and cond)
+                        if closed == "else":
+                            i, _ = parse(i, emit and not cond)
+                    elif kind == r"\else":
+                        return i, "else"
+                    elif kind == r"\fi":
+                        return i, "fi"
+                    elif emit:
+                        defined.add(m.group(2))
+                return i, None
+
+            parse(0, True)
+            return "".join(out)
+
+        b = self._budget()
+        files = {
+            "justification": build_document(
+                "Budget Justification", ["defs.tex"],
+                [("X", b, None, False, True)], subtitle="Dr. A"),
+            "driver": build_pdf_driver(["a_justification.tex", "b_justification.tex"]),
+            "summary": build_faculty_summary([("Dr. A", 1.0, 2.0, 3.0)]),
+            "by_year": build_faculty_summary_by_year([("Dr. A", [1.0, 2.0])]),
+        }
+        for name, text in files.items():
+            alone = expand(text, set())
+            for k in (r"\documentclass", r"\begin{document}", r"\end{document}"):
+                self.assertEqual(alone.count(k), 1, f"{name} standalone: {k}")
+            included = expand(text, {GUARD})
+            for k in (r"\documentclass", r"\begin{document}", r"\end{document}",
+                      r"\usepackage"):
+                self.assertEqual(included.count(k), 0,
+                                 f"{name} included: {k} must not be emitted")
+        # Standalone, the driver must define the guard before pulling children in.
+        drv = re.sub(r"(?<!\\)%.*", "", files["driver"])
+        self.assertLess(drv.index(r"\def" + GUARD + "{}"), drv.index(r"\input{"))
+
+    def test_faculty_summary_by_year(self):
+        from utkbudget.justification import build_faculty_summary_by_year
+        tex = build_faculty_summary_by_year([
+            ("Dr. A", [100.0, 110.0, 120.0, 0, 0]),
+            ("Dr. B", [200.0, 210.0, 220.0, 0, 0]),
+        ])
+        # One column per funded year; unfunded years 4-5 are not printed.
+        self.assertIn(r"Faculty & Year 1 & Year 2 & Year 3 & Total Requested \\", tex)
+        self.assertNotIn("Year 4", tex)
+        self.assertIn(r"\begin{tabular}{lrrrr}", tex)
+        # Each PI's ask per year, with their row total.
+        self.assertIn(r"Dr. A & \$100 & \$110 & \$120 & \$330 \\", tex)
+        # Column totals and the grand total agree both ways: the year columns sum
+        # to 300/320/340 = 960, and the row totals 330 + 630 come to 960 too.
+        self.assertIn(r"\textbf{Total} & \textbf{\$300} & \textbf{\$320} & "
+                      r"\textbf{\$340} & \textbf{\$960} \\", tex)
+        self.assertIn(r"\ifdefined\budgetjustificationincluded", tex)
+
+    def test_faculty_summary_by_year_grouped(self):
+        from utkbudget.justification import build_faculty_summary_by_year
+        tex = build_faculty_summary_by_year(groups=[
+            ("Energy Frontier", [("Dr. A", [100.0, 110.0]),
+                                 ("Dr. B", [200.0, 210.0])]),
+            ("Theory Frontier", [("Dr. C", [50.0, 55.0])]),
+        ])
+        self.assertIn(r"\multicolumn{4}{l}{\textbf{Energy Frontier}} \\", tex)
+        self.assertIn(r"\quad Dr. A & \$100 & \$110 & \$210 \\", tex)
+        self.assertIn(r"\textit{Energy Frontier subtotal} & \textit{\$300} & "
+                      r"\textit{\$320} & \textit{\$620} \\", tex)
+        self.assertIn(r"\textbf{Total} & \textbf{\$350} & \textbf{\$375} & "
+                      r"\textbf{\$725} \\", tex)
+
     def test_faculty_summary_grouped_by_thrust(self):
         from utkbudget.justification import build_faculty_summary
         tex = build_faculty_summary(groups=[
@@ -661,8 +756,8 @@ class CliJustificationTests(unittest.TestCase):
             smith_text = fh.read()
         # It \input{}s its dedicated defs file (not inlined) and uses that file's
         # unique macro prefix; the include guard lets it be dropped into a proposal.
-        self.assertIn(r"\input{PI_Smith}", smith_text)
-        self.assertNotIn(r"\newcommand", smith_text)   # defs live in the defs file
+        self.assertIn(r"\input{\budgetjustificationpath PI_Smith}", smith_text)
+        self.assertNotIn(r"\newcommand{", smith_text)  # defs live in the defs file
         self.assertIn(r"\ifdefined\budgetjustificationincluded", smith_text)
         self.assertIn(r"\PISmith", smith_text)          # unique-prefix macro
         # Rendered content: generic title + PI subtitle, no other PI.
@@ -674,13 +769,22 @@ class CliJustificationTests(unittest.TestCase):
         with open(defs) as fh:
             self.assertIn(r"\newcommand{\PISmithGrandTotal}", fh.read())
 
-        # The driver compiles every justification into one PDF.
+        # The driver pulls in every justification, and is itself includable: it
+        # only opens/closes the document (and defines the guard for its children)
+        # when it is NOT being included, tracked by its own standalone marker.
         with open(driver) as fh:
             driver_text = fh.read()
+        self.assertIn(r"\ifdefined\budgetjustificationincluded\else", driver_text)
         self.assertIn(r"\def\budgetjustificationincluded{}", driver_text)
-        self.assertIn(r"\usepackage{import}", driver_text)
-        self.assertIn("PI_Smith_justification", driver_text)
-        self.assertIn("PI_Jones_justification", driver_text)
+        self.assertIn(r"\def\budgetjustificationstandalone{}", driver_text)
+        self.assertIn("\\ifdefined\\budgetjustificationstandalone\n"
+                      "\\end{document}", driver_text)
+        self.assertIn(r"\input{\budgetjustificationpath PI_Smith_justification}",
+                      driver_text)
+        self.assertIn(r"\input{\budgetjustificationpath PI_Jones_justification}",
+                      driver_text)
+        # No \usepackage in the body -- illegal once included in a parent.
+        self.assertNotIn(r"\usepackage{import}", driver_text)
 
         # The combined justification carries the summed budget.
         with open(combined) as fh:
@@ -695,6 +799,51 @@ class CliJustificationTests(unittest.TestCase):
         self.assertIn("Alice", summary_text)
         self.assertIn("Bob", summary_text)
         self.assertIn(r"\textbf{Total}", summary_text)
+
+        # ...and the by-year summary is written alongside it.
+        by_year = os.path.join(outdir, "faculty_summary_by_year.tex")
+        self.assertTrue(os.path.exists(by_year))
+        with open(by_year) as fh:
+            by_year_text = fh.read()
+        self.assertIn("Alice", by_year_text)
+        self.assertIn("Year 1", by_year_text)
+
+    def test_grouped_output_is_flat_with_unique_names(self):
+        from utkbudget.cli import run
+        tmp = tempfile.mkdtemp()
+        indir = os.path.join(tmp, "in")
+        # Two thrusts, each with a like-named spreadsheet: flattening must not
+        # let one overwrite the other.
+        for thrust, pi in (("Energy Frontier", "Alice"),
+                           ("Theory Frontier", "Bob")):
+            os.makedirs(os.path.join(indir, thrust))
+            make_real_input(os.path.join(indir, thrust, "PI_Budget.xlsx"),
+                            seniors=[(pi, 100000, 2)])
+        outdir = os.path.join(tmp, "out")
+        run(indir, outdir)
+
+        # Every output sits directly in outdir -- no sub-directories at all.
+        self.assertEqual([d for d in os.listdir(outdir)
+                          if os.path.isdir(os.path.join(outdir, d))], [])
+        names = sorted(os.listdir(outdir))
+        # The colliding stem was disambiguated rather than overwritten.
+        self.assertIn("PI_Budget.tex", names)
+        self.assertIn("PI_Budget_2.tex", names)
+        self.assertIn("PI_Budget_justification.tex", names)
+        self.assertIn("PI_Budget_2_justification.tex", names)
+        # Both PIs survive, one per justification.
+        with open(os.path.join(outdir, "PI_Budget_justification.tex")) as fh:
+            first = fh.read()
+        with open(os.path.join(outdir, "PI_Budget_2_justification.tex")) as fh:
+            second = fh.read()
+        self.assertNotEqual(first, second)
+        self.assertEqual({"Alice" in first, "Alice" in second}, {True, False})
+        # The driver references both, by bare name (same flat directory).
+        with open(os.path.join(outdir, "all_justifications.tex")) as fh:
+            driver = fh.read()
+        for stem in ("PI_Budget_justification", "PI_Budget_2_justification"):
+            self.assertIn(r"\input{\budgetjustificationpath " + stem + "}", driver)
+        self.assertNotIn("/", driver.split(r"\begin{document}")[-1])
 
 
 class ProvenanceTests(unittest.TestCase):
