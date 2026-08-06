@@ -20,8 +20,9 @@ and it produces, for **every** input file:
 4. **Merged LaTeX definitions** (`merged.tex`) for the combined budget.
 5. **A separate combined-total justification** (`justification.tex`) for the
    summed budget.
-6. **A driver** (`all_justifications.tex`) that compiles **every** justification
-   into a single PDF.
+6. **A driver** (`all_justifications.tex`) that pulls the whole request into one
+   PDF, in reading order: both summary tables, then the combined/all-programs
+   justification, then the individual ones.
 7. **Two faculty summary tables**, ready to `\input` into a larger document:
    `faculty_summary.tex` (one row per faculty with their direct, indirect, and
    total DOE ask) and `faculty_summary_by_year.tex` (one row per faculty, **one
@@ -67,7 +68,7 @@ output/
 ├── merged.xlsx                  # Smith + Jones, summed
 ├── merged.tex                   # \newcommand defs for the sum
 ├── justification.tex            # combined-total justification (the sum)
-├── all_justifications.tex       # every justification, one after another
+├── all_justifications.tex       # summaries + combined + each justification
 ├── faculty_summary.tex          # one-row-per-faculty request table
 └── faculty_summary_by_year.tex  # one row per faculty, one column per year
 ```
@@ -108,7 +109,7 @@ output/
 ├── merged.xlsx                     # fully merged across every program
 ├── merged.tex                      # defs for the grand total
 ├── justification.tex               # per-program + fully merged grand total
-├── all_justifications.tex          # every justification, one after another
+├── all_justifications.tex          # summaries + combined + each justification
 ├── faculty_summary.tex             # PIs grouped by program, per-program subtotals
 └── faculty_summary_by_year.tex     # PIs by program x year, per-program subtotals
 ```
@@ -120,8 +121,8 @@ If two programs hold a like-named spreadsheet, the second one's outputs get a
 
 **Every** generated `.tex` works both ways — compile it on its own, or `\input`
 it into a larger proposal. That covers the per-PI justifications, the two summary
-tables, and `all_justifications.tex` (which pulls in every justification at
-once). Each wraps its preamble in an `\ifdefined` guard:
+tables, and `all_justifications.tex` (which pulls in the summary tables and
+every justification at once). Each wraps its preamble in an `\ifdefined` guard:
 
 ```latex
 % in your proposal's preamble:
@@ -132,7 +133,7 @@ once). Each wraps its preamble in an `\ifdefined` guard:
 \input{output/faculty_summary}
 \input{output/faculty_summary_by_year}
 \input{output/PI_Smith_justification}
-\input{output/all_justifications}     % every justification in one go
+\input{output/all_justifications}     % summaries + every justification
 ```
 
 `\budgetjustificationpath` is needed because TeX resolves relative `\input`

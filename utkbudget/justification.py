@@ -491,10 +491,17 @@ def build_document(
 
 
 def build_pdf_driver(justifications: Sequence[str],
-                     title: str = "Budget Justifications") -> str:
+                     title: str = "Budget Justifications",
+                     summaries: Sequence[Tuple[str, str]] = ()) -> str:
     """A driver that pulls every justification into one document.
 
-    ``justifications`` are names of generated files in the same output directory.
+    ``summaries`` are ``(heading, filename)`` pairs ``\\input`` at the very top,
+    ahead of everything else -- the at-a-glance request tables.  They get a
+    heading here because the summary files deliberately emit none of their own
+    (so they can also drop into a section of the user's choosing).
+    ``justifications`` are names of generated files in the same output directory,
+    emitted in the order given (the combined/all-programs one first).
+
     Like the justifications and the summary tables, this file works BOTH ways:
 
     * on its own -- ``latexmk -pdf all_justifications.tex`` -- it emits the
@@ -526,6 +533,11 @@ def build_pdf_driver(justifications: Sequence[str],
         + "\\maketitle\n"
         + "\\fi")
     body = []
+    for heading, rel in summaries:
+        body.append(f"\\section*{{{escape_tex(heading)}}}")
+        body.append(_input(rel))
+    if summaries:
+        body.append("\\clearpage")
     for rel in justifications:
         body.append(_input(rel))
         body.append("\\clearpage")
