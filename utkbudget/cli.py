@@ -10,13 +10,18 @@ every ``.xlsx`` input, write:
 * ``merged.xlsx`` / ``merged.tex`` -- a single workbook merging all inputs and
   its definitions;
 * ``justification.tex`` -- a justification of the combined sum;
-* ``all_justifications.tex`` -- a driver that compiles every justification into
-  one PDF (``latexmk -pdf all_justifications.tex``).
+* ``all_justifications.tex`` -- every justification in one document
+  (``latexmk -pdf all_justifications.tex``);
+* ``faculty_summary.tex`` / ``faculty_summary_by_year.tex`` -- request tables,
+  one row per faculty (the latter with one column per year).
 
 If the folder instead contains *sub-folders* (e.g. ``Program 1``,
 ``Program 2``, ``Program 3``), each sub-folder is treated as a program and gets
 its own merged workbook, definitions, and justifications, and a fully merged
-version across every program is produced at the top level.
+version across every program is produced.
+
+Every generated file is written into ONE flat output directory -- no
+sub-directories -- so a larger document can ``\\input`` them all from one place.
 """
 
 from __future__ import annotations
@@ -27,8 +32,9 @@ import sys
 import textwrap
 from typing import List, Tuple
 
-from .extractor import Budget, extract_budget
-from .justification import build_faculty_summary, build_pdf_driver, write_document
+from .extractor import PERIOD_WORDS, Budget, extract_budget
+from .justification import (build_faculty_summary, build_faculty_summary_by_year,
+                            build_pdf_driver, write_document)
 from .merge import (MergeIssue, RowOverflow, ValueConflict, merge_budgets,
                     write_merged_workbook)
 from .texdefs import escape_tex, tex_prefix, write_defs
@@ -133,8 +139,23 @@ def _unique(prefix: str, used: set) -> str:
         i += 1
 
 
+def _unique_name(base: str, used: set) -> str:
+    """A filename stem not already taken (``PI_Smith``, ``PI_Smith_2``, ...).
+
+    Needed because every generated file goes in ONE flat output directory."""
+    if base not in used:
+        used.add(base)
+        return base
+    i = 2
+    while f"{base}_{i}" in used:
+        i += 1
+    used.add(f"{base}_{i}")
+    return f"{base}_{i}"
+
+
 def process_group(name: str, files: List[str], out_dir: str,
-                  group_prefix: str, file_stub: str = None
+                  group_prefix: str, file_stub: str = None,
+                  used_names: set = None
                   ) -> Tuple[Budget, str, List[Budget]]:
     """Process one group of spreadsheets into ``out_dir``.
 
@@ -146,6 +167,10 @@ def process_group(name: str, files: List[str], out_dir: str,
     Each input file gets its OWN ``<file>_justification.tex`` that ``\\input``s
     that file's dedicated defs file, so a single PI can compile theirs (or drop
     it into a larger proposal).  The combined-total justification is separate.
+
+    Every group writes into the SAME flat ``out_dir`` -- no sub-directories --
+    so ``used_names`` is threaded through all the groups to keep like-named
+    spreadsheets in different program folders from overwriting each other.
 
     Returns ``(merged_budget, group_merged_tex_path, budgets,
     individual_justification_paths, combined_justification_path)``.
@@ -159,6 +184,8 @@ def process_group(name: str, files: List[str], out_dir: str,
         merged_tex_name = "merged.tex"
         just_name = "justification.tex"
     os.makedirs(out_dir, exist_ok=True)
+    if used_names is None:
+        used_names = set()
     print(f"\n=== {name}: {len(files)} file(s) -> {out_dir} ===")
 
     used_prefixes = {group_prefix}
@@ -171,6 +198,9 @@ def process_group(name: str, files: List[str], out_dir: str,
         budget = extract_budget(path)
         budgets.append(budget)
         prefix = _unique(tex_prefix(base), used_prefixes)
+        # Everything lands in one flat directory, so two programs holding a
+        # like-named spreadsheet would otherwise overwrite each other.
+        base = _unique_name(base, used_names)
 
         tex_name = f"{base}.tex"
         write_defs(budget, prefix, os.path.join(out_dir, tex_name))
@@ -221,49 +251,64 @@ def process_group(name: str, files: List[str], out_dir: str,
             individual_paths, just_path)
 
 
+def _val(b: Budget, name: str) -> float:
+    v = b.get(name)
+    try:
+        return float(v) if v not in (None, "") else 0.0
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _faculty_summary_entries(budgets: List[Budget]):
     """(faculty name, direct, indirect, total) for each budget, for the summary
     table -- one row per faculty with their final DOE ask."""
-    def val(b: Budget, name: str) -> float:
-        v = b.get(name)
-        try:
-            return float(v) if v not in (None, "") else 0.0
-        except (TypeError, ValueError):
-            return 0.0
-
     return [(_pi_name(b) or "(unnamed)",
-             val(b, "DirectTotal"), val(b, "IndirectTotal"), val(b, "GrandTotal"))
+             _val(b, "DirectTotal"), _val(b, "IndirectTotal"),
+             _val(b, "GrandTotal"))
+            for b in budgets]
+
+
+def _faculty_year_entries(budgets: List[Budget]):
+    """(faculty name, [per-period total, ...]) for the by-year summary table --
+    each PI's total request in each budget period."""
+    return [(_pi_name(b) or "(unnamed)",
+             [_val(b, f"GrandYear{w}") for w in PERIOD_WORDS])
             for b in budgets]
 
 
 def _write_faculty_summary(output_dir: str, budgets: List[Budget] = None,
                            groups: List[Tuple[str, List[Budget]]] = None) -> None:
-    """Write ``faculty_summary.tex`` -- a one-row-per-faculty request table.
+    """Write the two summary tables: ``faculty_summary.tex`` (one row per faculty
+    with their direct/indirect/total ask) and ``faculty_summary_by_year.tex``
+    (one row per faculty, one column per year).
 
-    Pass ``budgets`` for a flat table, or ``groups`` (``(sub-folder name,
+    Pass ``budgets`` for flat tables, or ``groups`` (``(sub-folder name,
     budgets)`` pairs) to group the PIs by thrust with per-thrust subtotals."""
-    path = os.path.join(output_dir, "faculty_summary.tex")
-    if groups is not None:
-        content = build_faculty_summary(
-            groups=[(name, _faculty_summary_entries(bs)) for name, bs in groups])
-    else:
-        content = build_faculty_summary(_faculty_summary_entries(budgets))
-    with open(path, "w") as fh:
-        fh.write(content)
-    print(f"  wrote {os.path.relpath(path)}")
+    for fname, build, rows in (
+            ("faculty_summary.tex", build_faculty_summary, _faculty_summary_entries),
+            ("faculty_summary_by_year.tex", build_faculty_summary_by_year,
+             _faculty_year_entries)):
+        if groups is not None:
+            content = build(groups=[(name, rows(bs)) for name, bs in groups])
+        else:
+            content = build(rows(budgets))
+        path = os.path.join(output_dir, fname)
+        with open(path, "w") as fh:
+            fh.write(content)
+        print(f"  wrote {os.path.relpath(path)}")
 
 
 def _write_pdf_driver(output_dir: str, just_paths: List[str]) -> None:
     """Write ``all_justifications.tex`` -- a driver that compiles every
     justification into a single PDF -- and print the compile command."""
-    rel = [os.path.relpath(p, output_dir) for p in just_paths]
+    rel = [os.path.basename(p) for p in just_paths]   # all in one flat directory
     driver = os.path.join(output_dir, "all_justifications.tex")
     with open(driver, "w") as fh:
         fh.write(build_pdf_driver(rel))
     print(f"  wrote {os.path.relpath(driver)}")
     print("\n  Compile every justification into one PDF with:")
     print(f"    latexmk -pdf -cd {os.path.join(output_dir, 'all_justifications.tex')}")
-    print("    (or run pdflatex on it twice; needs the 'import' LaTeX package)")
+    print("    (or run pdflatex on it twice)")
 
 
 def run(input_dir: str, output_dir: str) -> None:
@@ -309,11 +354,13 @@ def run(input_dir: str, output_dir: str) -> None:
         pending.insert(0, (os.path.basename(os.path.normpath(input_dir)) or "Root",
                            input_dir, root_files))
 
+    used_names: set = set()
     for name, _src, files in pending:
         gprefix = _unique(tex_prefix(name) + "Sum", group_used)
-        group_out = os.path.join(output_dir, tex_prefix(name) or "group")
+        # Flat output: every program writes into the one output directory.
         merged, merged_tex_path, budgets, individual_paths, _combined = process_group(
-            name, files, group_out, gprefix, file_stub=tex_prefix(name))
+            name, files, output_dir, gprefix, file_stub=tex_prefix(name),
+            used_names=used_names)
         group_merged.append((name, merged))
         group_budgets.append((name, budgets))
         all_budgets.extend(budgets)

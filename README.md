@@ -22,12 +22,16 @@ and it produces, for **every** input file:
    summed budget.
 6. **A driver** (`all_justifications.tex`) that compiles **every** justification
    into a single PDF.
-7. **A faculty summary table** (`faculty_summary.tex`) — one row per faculty
-   with their direct, indirect, and total DOE ask (and a grand-total row), ready
-   to `\input` into a larger document. With program sub-folders (a multi-thrust
-   proposal, e.g. `Energy Frontier/`, `Intensity Frontier/`, `Theory
-   Frontier/`), the PIs are grouped under each sub-folder's name with a
-   per-thrust subtotal.
+7. **Two faculty summary tables**, ready to `\input` into a larger document:
+   `faculty_summary.tex` (one row per faculty with their direct, indirect, and
+   total DOE ask) and `faculty_summary_by_year.tex` (one row per faculty, **one
+   column per year**, so a program manager can see the ask per year per PI at a
+   glance). With program sub-folders (a multi-thrust proposal, e.g. `Energy
+   Frontier/`, `Intensity Frontier/`, `Theory Frontier/`), both group the PIs
+   under each sub-folder's name with a per-thrust subtotal.
+
+All generated files land in **one flat output directory** — no sub-folders — so
+they are easy to `\input` from a single place.
 
 ## Install
 
@@ -63,8 +67,9 @@ output/
 ├── merged.xlsx                  # Smith + Jones, summed
 ├── merged.tex                   # \newcommand defs for the sum
 ├── justification.tex            # combined-total justification (the sum)
-├── all_justifications.tex       # compiles every justification into one PDF
-└── faculty_summary.tex          # one-row-per-faculty request table
+├── all_justifications.tex       # every justification, one after another
+├── faculty_summary.tex          # one-row-per-faculty request table
+└── faculty_summary_by_year.tex  # one row per faculty, one column per year
 ```
 
 ### Folder with program sub-folders
@@ -84,44 +89,59 @@ budgets/
     └── PI_Richers.xlsx
 ```
 
-produces
+produces — everything in **one flat directory**, no sub-folders:
 
 ```
 output/
-├── ProgramOne/
-│   ├── PI_Smith.tex
-│   ├── PI_Smith_justification.tex     # Smith only (\input's PI_Smith.tex)
-│   ├── PI_Jones.tex
-│   ├── PI_Jones_justification.tex     # Jones only (\input's PI_Jones.tex)
-│   ├── ProgramOne_merged.xlsx
-│   ├── ProgramOne_merged.tex
-│   └── ProgramOne_justification.tex   # Program 1 combined total
-├── ProgramTwo/ ...
-├── ProgramThree/ ...
-├── merged.xlsx              # fully merged across every program
-├── merged.tex               # defs for the grand total
-├── justification.tex        # per-program + fully merged grand total
-├── all_justifications.tex   # compiles every justification into one PDF
-└── faculty_summary.tex      # PIs grouped by program, per-program subtotals
+├── PI_Smith.tex                    # defs, one per input file
+├── PI_Smith_justification.tex      # Smith only (\input's PI_Smith.tex)
+├── PI_Jones.tex
+├── PI_Jones_justification.tex
+├── PI_Lee.tex                      # (from Program 2)
+├── PI_Lee_justification.tex
+├── PI_Richers.tex                  # (from Program 3)
+├── PI_Richers_justification.tex
+├── ProgramOne_merged.xlsx          # per-program merged workbook + defs
+├── ProgramOne_merged.tex
+├── ProgramOne_justification.tex    # Program 1 combined total
+├── ProgramTwo_merged.xlsx  ...     # likewise for the other programs
+├── merged.xlsx                     # fully merged across every program
+├── merged.tex                      # defs for the grand total
+├── justification.tex               # per-program + fully merged grand total
+├── all_justifications.tex          # every justification, one after another
+├── faculty_summary.tex             # PIs grouped by program, per-program subtotals
+└── faculty_summary_by_year.tex     # PIs by program x year, per-program subtotals
 ```
 
-## Including justifications
+If two programs hold a like-named spreadsheet, the second one's outputs get a
+`_2` suffix (`PI_Smith_2.tex`) rather than overwriting the first.
 
-Each `*_justification.tex` both compiles on its own **and** `\input`s into a
-larger proposal. It `\input`s its own defs file and wraps its preamble in an
-`\ifdefined` guard, so:
+## Including the generated LaTeX
+
+**Every** generated `.tex` works both ways — compile it on its own, or `\input`
+it into a larger proposal. That covers the per-PI justifications, the two summary
+tables, and `all_justifications.tex` (which pulls in every justification at
+once). Each wraps its preamble in an `\ifdefined` guard:
 
 ```latex
 % in your proposal's preamble:
-\def\budgetjustificationincluded{}   % skip each justification's own preamble
+\def\budgetjustificationincluded{}    % skip the generated files' own preambles
+\def\budgetjustificationpath{output/} % where the generated files live
 ...
-% in the body:
-\input{output/ProgramOne/PI_Smith_justification}
+% in the body — any of these:
+\input{output/faculty_summary}
+\input{output/faculty_summary_by_year}
+\input{output/PI_Smith_justification}
+\input{output/all_justifications}     % every justification in one go
 ```
 
-To compile **all** justifications into a single PDF, use the generated driver
-(it defines the guard and pulls in every justification via the `import`
-package):
+`\budgetjustificationpath` is needed because TeX resolves relative `\input`
+paths against the *main* document's directory, not the included file's — so
+without it the nested `\input`s (a justification pulling in its defs file) would
+not be found. Set it once and every nested `\input` follows. If you compile from
+inside `output/`, leave it unset.
+
+To build any of them standalone:
 
 ```bash
 latexmk -pdf output/all_justifications.tex      # or: pdflatex it twice
