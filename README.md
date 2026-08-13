@@ -30,6 +30,9 @@ and it produces, for **every** input file:
    glance). With program sub-folders (a multi-thrust proposal, e.g. `Energy
    Frontier/`, `Intensity Frontier/`, `Theory Frontier/`), both group the PIs
    under each sub-folder's name with a per-thrust subtotal.
+8. **The summed figures behind those tables** (`faculty_summary_defs.tex`) as
+   `\newcommand`s — see [Summary figures as
+   macros](#summary-figures-as-macros).
 
 All generated files land in **one flat output directory** — no sub-folders — so
 they are easy to `\input` from a single place.
@@ -70,7 +73,8 @@ output/
 ├── justification.tex            # combined-total justification (the sum)
 ├── all_justifications.tex       # summaries + combined + each justification
 ├── faculty_summary.tex          # one-row-per-faculty request table
-└── faculty_summary_by_year.tex  # one row per faculty, one column per year
+├── faculty_summary_by_year.tex  # one row per faculty, one column per year
+└── faculty_summary_defs.tex     # the summed figures, as \newcommand macros
 ```
 
 ### Folder with program sub-folders
@@ -111,7 +115,8 @@ output/
 ├── justification.tex               # per-program + fully merged grand total
 ├── all_justifications.tex          # summaries + combined + each justification
 ├── faculty_summary.tex             # PIs grouped by program, per-program subtotals
-└── faculty_summary_by_year.tex     # PIs by program x year, per-program subtotals
+├── faculty_summary_by_year.tex     # PIs by program x year, per-program subtotals
+└── faculty_summary_defs.tex        # the summed figures, as \newcommand macros
 ```
 
 If two programs hold a like-named spreadsheet, the second one's outputs get a
@@ -147,6 +152,36 @@ To build any of them standalone:
 ```bash
 latexmk -pdf output/all_justifications.tex      # or: pdflatex it twice
 ```
+
+## Summary figures as macros
+
+Neither summary table hard-codes a dollar amount. Every figure in them — each
+PI's row, each per-thrust subtotal, and the grand totals — is a `\newcommand`
+defined in `faculty_summary_defs.tex`, which both tables `\input` automatically.
+Re-running the tool rewrites only that file, so **the numbers update and the
+surrounding text stays exactly as it is** — including any edits you have made to
+the generated tables.
+
+The macros are named after the thrust and the faculty member, so you can pull the
+same figures into your own prose:
+
+```latex
+\input{output/faculty_summary_defs}     % the tables do this for you
+...
+We request a total of \$\FacultySummaryGrandTotal{} over the project period,
+of which \$\FacultySummaryEnergyFrontierSubtotalTotal{} supports the Energy
+Frontier effort. Dr.~Lee's first-year request is
+\$\FacultySummaryEnergyFrontierDrLeeYearOne{}.
+```
+
+The pattern is `\FacultySummary<Thrust><Faculty><Field>`, where `<Thrust>` is
+omitted for a flat (single-thrust) input folder and `<Field>` is one of `Direct`,
+`Indirect`, `Total`, `YearOne` … `YearFive`, or `YearsTotal`. Use `Subtotal` in
+place of a faculty name for a per-thrust subtotal, and `Grand` in place of both
+for the whole request. Names are reduced to letters (`Dr. Lee` →
+`DrLee`); if two people reduce to the same name, the second gets a `Two` suffix.
+The file carries a comment above each block naming the person, so you can always
+read off the macro you want.
 
 ## Using the output in a proposal
 

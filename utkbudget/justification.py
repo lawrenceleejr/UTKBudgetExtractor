@@ -19,7 +19,7 @@ from typing import List, Sequence, Tuple
 
 from .extractor import PERIOD_WORDS, round_dollar
 from .provenance import provenance_comment
-from .texdefs import escape_tex
+from .texdefs import escape_tex, tex_name
 
 
 def _m(prefix: str, field: str) -> str:
@@ -546,6 +546,125 @@ def build_pdf_driver(justifications: Sequence[str],
     return "\n\n".join(out) + "\n"
 
 
+SUMMARY_DEFS_FILE = "faculty_summary_defs.tex"
+SUMMARY_MACRO_PREFIX = "FacultySummary"
+# Guards the defs file against being loaded twice (both summary tables \input
+# it, so a document including both would otherwise redefine every \newcommand).
+SUMMARY_DEFS_GUARD = r"\facultysummarydefsloaded"
+
+
+def _stem(*parts) -> str:
+    """A letters-only macro stem from arbitrary name parts."""
+    return SUMMARY_MACRO_PREFIX + "".join(tex_name(p) for p in parts if p)
+
+
+def _summary_stems(groups):
+    """Assign each row a unique macro stem: ``[(gname, [(label, stem)],
+    subtotal_stem)]``.
+
+    Derived only from the group and faculty names, so the by-faculty and the
+    by-year table independently arrive at the SAME stem for the same person and
+    can share one defs file."""
+    used = set()
+
+    def uniq(cand):
+        stem, i = cand, 1
+        while stem in used:
+            i += 1
+            stem = cand + tex_name(str(i))     # ...Two, ...Three (letters only)
+        used.add(stem)
+        return stem
+
+    out = []
+    for gname, es in groups:
+        rows = [(label, uniq(_stem(gname, label))) for label, *_ in es]
+        out.append((gname, rows, uniq(_stem(gname, "Subtotal")) if gname else None))
+    return out
+
+
+def _money_macro(stem: str, suffix: str) -> str:
+    """A dollar figure pulled from the summary defs file."""
+    return f"\\${{}}\\{stem}{suffix}{{}}"
+
+
+def build_summary_defs(by_faculty=None, by_year=None) -> str:
+    """The ``\\newcommand`` definitions behind the summary tables.
+
+    Both tables reference these macros instead of hard-coding their figures, so
+    re-running the tool updates the numbers while any surrounding text -- in the
+    generated tables or in prose the user writes -- stays put.
+
+    ``by_faculty`` is the grouped ``(name, [(label, direct, indirect, total)])``
+    data and ``by_year`` the grouped ``(name, [(label, [year, ...])])`` data;
+    each contributes its own suffixes under a shared per-person stem."""
+    lines = [provenance_comment()]
+    lines.append(
+        "% Every summed figure in the two faculty summary tables.  The tables\n"
+        "% \\input this file and reference these macros, so regenerating the\n"
+        "% budgets updates the numbers and leaves the surrounding text alone.\n"
+        "% You can reference them in your own prose too, e.g.\n"
+        "%   The total request is \\${}\\FacultySummaryGrandTotal{}.")
+    lines.append(f"\\ifdefined{SUMMARY_DEFS_GUARD}\\else")
+    lines.append(f"\\def{SUMMARY_DEFS_GUARD}{{}}")
+
+    def define(stem, suffix, value):
+        lines.append("\\newcommand{\\%s%s}{%s}" % (stem, suffix, f"{value:,}"))
+
+    if by_faculty:
+        groups = [(g, [(n, round_dollar(d), round_dollar(i), round_dollar(t))
+                       for n, d, i, t in es]) for g, es in by_faculty]
+        stems = _summary_stems(groups)
+        lines.append("% --- by faculty: direct / indirect / total ---")
+        gt = [0, 0, 0]
+        for (gname, rows, sub_stem), (_, es) in zip(stems, groups):
+            st = [0, 0, 0]
+            for (label, stem), (_, d, i, t) in zip(rows, es):
+                lines.append(f"% {label}" + (f"  ({gname})" if gname else ""))
+                for suffix, v in (("Direct", d), ("Indirect", i), ("Total", t)):
+                    define(stem, suffix, v)
+                st = [a + b for a, b in zip(st, (d, i, t))]
+            if sub_stem:
+                lines.append(f"% {gname} subtotal")
+                for suffix, v in zip(("Direct", "Indirect", "Total"), st):
+                    define(sub_stem, suffix, v)
+            gt = [a + b for a, b in zip(gt, st)]
+        lines.append("% grand total across every faculty member")
+        for suffix, v in zip(("Direct", "Indirect", "Total"), gt):
+            define(_stem("Grand"), suffix, v)
+
+    if by_year:
+        groups = [(g, [(n, [round_dollar(v) for v in years]) for n, years in es])
+                  for g, es in by_year]
+        stems = _summary_stems(groups)
+        width = max((len(y) for _, es in groups for _, y in es),
+                    default=len(PERIOD_WORDS))
+        words = list(PERIOD_WORDS)[:width]
+        lines.append("% --- by faculty and year ---")
+        gt = [0] * width
+        for (gname, rows, sub_stem), (_, es) in zip(stems, groups):
+            st = [0] * width
+            for (label, stem), (_, years) in zip(rows, es):
+                years = list(years) + [0] * (width - len(years))
+                lines.append(f"% {label}" + (f"  ({gname})" if gname else ""))
+                for w, v in zip(words, years):
+                    define(stem, f"Year{w}", v)
+                define(stem, "YearsTotal", sum(years))
+                st = [a + b for a, b in zip(st, years)]
+            if sub_stem:
+                lines.append(f"% {gname} subtotal by year")
+                for w, v in zip(words, st):
+                    define(sub_stem, f"Year{w}", v)
+                define(sub_stem, "YearsTotal", sum(st))
+            gt = [a + b for a, b in zip(gt, st)]
+        lines.append("% grand total by year")
+        for w, v in zip(words, gt):
+            define(_stem("Grand"), f"Year{w}", v)
+        define(_stem("Grand"), "YearsTotal", sum(gt))
+
+    lines.append("\\fi")
+    return "\n".join(lines) + "\n"
+
+
 def build_faculty_summary(entries=None, title: str = "DOE Budget Request by Faculty",
                           groups=None) -> str:
     """A summary table -- one row per faculty with their final DOE ask -- meant
@@ -560,57 +679,52 @@ def build_faculty_summary(entries=None, title: str = "DOE Budget Request by Facu
     bold group heading, its PIs indented beneath it, and a subtotal row summed
     over that sub-folder; a grand total closes the table.
 
+    Every figure is a macro reference resolved from ``faculty_summary_defs.tex``
+    (see :func:`build_summary_defs`), which this file ``\\input``s -- so
+    regenerating the budgets updates the numbers and leaves the text alone.
+
     Uses only plain ``\\hline`` rules so it drops into any document with no
     extra packages, and the same ``\\ifdefined\\budgetjustificationincluded``
     guard as the justifications so it also compiles on its own."""
-    def money(x):
-        return f"\\${x:,}"
-
     if groups is None:
         groups = [(None, list(entries))]
-    # Round every figure to the nearest dollar ONCE, up front, so each
-    # subtotal/total is the sum of the rounded rows it prints above it (rounding
-    # only at display time could leave a total a dollar off its own column).
-    groups = [(g, [(n, round_dollar(d), round_dollar(i), round_dollar(t))
-                   for n, d, i, t in es]) for g, es in groups]
-    all_entries = [e for _, es in groups for e in es]
-    td = sum(e[1] for e in all_entries)
-    ti = sum(e[2] for e in all_entries)
-    tt = sum(e[3] for e in all_entries)
+    stems = _summary_stems(groups)
 
     out = [provenance_comment()]
     out.append(
         "% Summary table: one row per faculty with their DOE request.  Compiles\n"
         "% on its own; to \\input it into a larger document, put\n"
-        "% \\def\\budgetjustificationincluded{} in that document's preamble first.")
+        "% \\def\\budgetjustificationincluded{} in that document's preamble first.\n"
+        "% The figures come from " + SUMMARY_DEFS_FILE + ", \\input just below.")
+    out.append(_path_preamble())
     out.append(
         f"\\ifdefined{INCLUDE_GUARD}\\else\n"
         + PREAMBLE
         + f"\\title{{{escape_tex(title)}}}\n"
         + "\\begin{document}\n\\maketitle\n\\fi")
+    out.append(_input(SUMMARY_DEFS_FILE))
 
     lines = ["\\begin{center}", "\\begin{tabular}{lrrr}", "\\hline",
              "Faculty & Direct Costs & Indirect (F\\&A) & Total Requested \\\\",
              "\\hline"]
-    for gname, es in groups:
+    for gname, rows, sub_stem in stems:
         indent = "\\quad " if gname is not None else ""
         if gname is not None:
             lines.append(f"\\multicolumn{{4}}{{l}}{{\\textbf{{{escape_tex(str(gname))}}}}} \\\\")
-        for name, direct, indirect, total in es:
-            lines.append(f"{indent}{escape_tex(str(name))} & {money(direct)} & "
-                         f"{money(indirect)} & {money(total)} \\\\")
-        if gname is not None:
-            gd = sum(e[1] for e in es)
-            gi = sum(e[2] for e in es)
-            gt = sum(e[3] for e in es)
-            lines.append(f"\\textit{{{escape_tex(str(gname))} subtotal}} & "
-                         f"\\textit{{{money(gd)}}} & \\textit{{{money(gi)}}} & "
-                         f"\\textit{{{money(gt)}}} \\\\")
+        for label, stem in rows:
+            cells = " & ".join(_money_macro(stem, s)
+                               for s in ("Direct", "Indirect", "Total"))
+            lines.append(f"{indent}{escape_tex(str(label))} & {cells} \\\\")
+        if sub_stem is not None:
+            cells = " & ".join(f"\\textit{{{_money_macro(sub_stem, s)}}}"
+                               for s in ("Direct", "Indirect", "Total"))
+            lines.append(f"\\textit{{{escape_tex(str(gname))} subtotal}} & {cells} \\\\")
             lines.append("\\hline")
-    if groups[-1][0] is None:
+    if stems[-1][0] is None:
         lines.append("\\hline")
-    lines.append(f"\\textbf{{Total}} & \\textbf{{{money(td)}}} & "
-                 f"\\textbf{{{money(ti)}}} & \\textbf{{{money(tt)}}} \\\\")
+    grand = " & ".join(f"\\textbf{{{_money_macro(_stem('Grand'), s)}}}"
+                       for s in ("Direct", "Indirect", "Total"))
+    lines.append(f"\\textbf{{Total}} & {grand} \\\\")
     lines.append("\\hline")
     lines += ["\\end{tabular}", "\\end{center}"]
     out.append("\n".join(lines))
@@ -632,70 +746,70 @@ def build_faculty_summary_by_year(
     the table.
 
     Only periods that carry money anywhere in the request get a column, so an
-    unfunded year 4/5 is not printed.  Same plain-``\\hline`` styling and
+    unfunded year 4/5 is not printed.  Every figure is a macro reference resolved
+    from ``faculty_summary_defs.tex``.  Same plain-``\\hline`` styling and
     ``\\ifdefined`` guard as :func:`build_faculty_summary`."""
-    def money(x):
-        return f"\\${x:,}"
-
     if groups is None:
         groups = [(None, list(entries))]
-    # Round once, up front, so every subtotal/total equals the sum of the
-    # rounded figures printed around it (both down columns and across rows).
-    groups = [(g, [(n, [round_dollar(v) for v in years]) for n, years in es])
-              for g, es in groups]
-    all_entries = [e for _, es in groups for e in es]
+    rounded = [(g, [(n, [round_dollar(v) for v in years]) for n, years in es])
+               for g, es in groups]
+    all_entries = [e for _, es in rounded for e in es]
+    stems = _summary_stems(groups)
 
     width = max((len(years) for _, years in all_entries), default=len(PERIOD_WORDS))
 
     def pad(years):
         return list(years) + [0] * (width - len(years))
 
-    # Drop trailing periods that are unfunded across the whole request.
+    # Drop periods that are unfunded across the whole request.  (Which years get
+    # a column is decided from the values; the values themselves are printed as
+    # macros, so editing the defs file changes the figures, not the layout.)
     active = [i for i in range(width)
               if any(pad(years)[i] for _, years in all_entries)]
     if not active:
         active = [0]
     ncols = len(active)
+    words = list(PERIOD_WORDS)[:width]
 
-    def row(label, years, fmt="{}"):
-        cells = [fmt.format(money(pad(years)[i])) for i in active]
-        cells.append(fmt.format(money(sum(pad(years)))))
+    def row(label, stem, fmt="{}"):
+        cells = [fmt.format(_money_macro(stem, f"Year{words[i]}")) for i in active]
+        cells.append(fmt.format(_money_macro(stem, "YearsTotal")))
         return f"{label} & " + " & ".join(cells) + " \\\\"
-
-    def col_sums(es):
-        return [sum(pad(years)[i] for _, years in es) for i in range(width)]
 
     out = [provenance_comment()]
     out.append(
         "% Summary table: one row per faculty, one column per year, so the ask\n"
         "% per year per PI is visible at a glance.  Compiles on its own; to\n"
         "% \\input it into a larger document, put\n"
-        "% \\def\\budgetjustificationincluded{} in that document's preamble first.")
+        "% \\def\\budgetjustificationincluded{} in that document's preamble first.\n"
+        "% The figures come from " + SUMMARY_DEFS_FILE + ", \\input just below.")
+    out.append(_path_preamble())
     out.append(
         f"\\ifdefined{INCLUDE_GUARD}\\else\n"
         + PREAMBLE
         + f"\\title{{{escape_tex(title)}}}\n"
         + "\\begin{document}\n\\maketitle\n\\fi")
+    out.append(_input(SUMMARY_DEFS_FILE))
 
     header = " & ".join(f"Year {i + 1}" for i in active)
     lines = ["\\begin{center}",
              "\\begin{tabular}{l" + "r" * (ncols + 1) + "}", "\\hline",
              f"Faculty & {header} & Total Requested \\\\",
              "\\hline"]
-    for gname, es in groups:
+    for gname, rows, sub_stem in stems:
         indent = "\\quad " if gname is not None else ""
         if gname is not None:
             lines.append(f"\\multicolumn{{{ncols + 2}}}{{l}}"
                          f"{{\\textbf{{{escape_tex(str(gname))}}}}} \\\\")
-        for name, years in es:
-            lines.append(row(f"{indent}{escape_tex(str(name))}", years))
-        if gname is not None:
+        for label, stem in rows:
+            lines.append(row(f"{indent}{escape_tex(str(label))}", stem))
+        if sub_stem is not None:
             lines.append(row(f"\\textit{{{escape_tex(str(gname))} subtotal}}",
-                             col_sums(es), "\\textit{{{}}}"))
+                             sub_stem, "\\textit{{{}}}"))
             lines.append("\\hline")
-    if groups[-1][0] is None:
+    if stems[-1][0] is None:
         lines.append("\\hline")
-    lines.append(row("\\textbf{Total}", col_sums(all_entries), "\\textbf{{{}}}"))
+    lines.append(row("\\textbf{Total}", _stem("Grand"), "\\textbf{{{}}}"))
     lines.append("\\hline")
     lines += ["\\end{tabular}", "\\end{center}"]
     out.append("\n".join(lines))

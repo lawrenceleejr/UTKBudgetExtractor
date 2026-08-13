@@ -33,8 +33,9 @@ import textwrap
 from typing import List, Tuple
 
 from .extractor import PERIOD_WORDS, Budget, extract_budget
-from .justification import (build_faculty_summary, build_faculty_summary_by_year,
-                            build_pdf_driver, write_document)
+from .justification import (SUMMARY_DEFS_FILE, build_faculty_summary,
+                            build_faculty_summary_by_year, build_pdf_driver,
+                            build_summary_defs, write_document)
 from .merge import (MergeIssue, RowOverflow, ValueConflict, merge_budgets,
                     write_merged_workbook)
 from .texdefs import escape_tex, tex_prefix, write_defs
@@ -291,14 +292,23 @@ def _write_faculty_summary(output_dir: str, budgets: List[Budget] = None,
 
     Pass ``budgets`` for flat tables, or ``groups`` (``(sub-folder name,
     budgets)`` pairs) to group the PIs by thrust with per-thrust subtotals."""
+    if groups is None:
+        groups = [(None, budgets)]
+
+    # The summed figures live in their own defs file; both tables \input it and
+    # reference the macros, so re-running updates numbers and not text.
+    defs_path = os.path.join(output_dir, SUMMARY_DEFS_FILE)
+    with open(defs_path, "w") as fh:
+        fh.write(build_summary_defs(
+            by_faculty=[(name, _faculty_summary_entries(bs)) for name, bs in groups],
+            by_year=[(name, _faculty_year_entries(bs)) for name, bs in groups]))
+    print(f"  wrote {os.path.relpath(defs_path)}")
+
     for (fname, _heading), build, rows in zip(
             SUMMARY_TABLES,
             (build_faculty_summary, build_faculty_summary_by_year),
             (_faculty_summary_entries, _faculty_year_entries)):
-        if groups is not None:
-            content = build(groups=[(name, rows(bs)) for name, bs in groups])
-        else:
-            content = build(rows(budgets))
+        content = build(groups=[(name, rows(bs)) for name, bs in groups])
         path = os.path.join(output_dir, fname)
         with open(path, "w") as fh:
             fh.write(content)

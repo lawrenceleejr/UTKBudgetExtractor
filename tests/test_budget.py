@@ -598,24 +598,31 @@ class JustificationContentTests(unittest.TestCase):
         from utkbudget.justification import build_faculty_summary
         tex = build_faculty_summary([("Dr. A", 100.0, 50.0, 150.0),
                                      ("R_D Lab", 200.0, 100.0, 300.0)])
-        # one row per faculty with their figures, rounded to whole dollars
-        self.assertIn(r"Dr. A & \$100 & \$50 & \$150 \\", tex)
-        self.assertIn(r"R\_D Lab & \$200 & \$100 & \$300 \\", tex)  # escaped
-        # total row = column sums
-        self.assertIn(r"\textbf{Total} & \textbf{\$300} & \textbf{\$150} & "
-                      r"\textbf{\$450} \\", tex)
+        # One row per faculty, every figure a macro reference (values live in the
+        # defs file), with the label still escaped for LaTeX.
+        self.assertIn(r"Dr. A & \${}\FacultySummaryDrADirect{} & "
+                      r"\${}\FacultySummaryDrAIndirect{} & "
+                      r"\${}\FacultySummaryDrATotal{} \\", tex)
+        self.assertIn(r"R\_D Lab & \${}\FacultySummaryRDLabDirect{}", tex)
+        self.assertIn(r"\textbf{Total} & \textbf{\${}\FacultySummaryGrandDirect{}} & "
+                      r"\textbf{\${}\FacultySummaryGrandIndirect{}} & "
+                      r"\textbf{\${}\FacultySummaryGrandTotal{}} \\", tex)
+        # No hard-coded dollar amounts anywhere in the table.
+        self.assertNotIn(r"\$100", tex)
+        self.assertNotIn(r"\$450", tex)
         # includable via the same guard as the justifications
         self.assertIn(r"\ifdefined\budgetjustificationincluded", tex)
+        self.assertIn(r"\input{\budgetjustificationpath faculty_summary_defs}", tex)
 
     def test_faculty_summary_totals_consistent_after_rounding(self):
-        from utkbudget.justification import build_faculty_summary
-        # Rows are rounded once at ingestion, so the printed total equals the
-        # sum of the printed rows ($10 + $10 = $20), not round(10.4 + 10.4) = 21.
-        tex = build_faculty_summary([("A", 10.4, 0.0, 10.4),
-                                     ("B", 10.4, 0.0, 10.4)])
-        self.assertIn(r"A & \$10 & \$0 & \$10 \\", tex)
-        self.assertIn(r"\textbf{\$20}", tex)
-        self.assertNotIn(r"\$21", tex)
+        from utkbudget.justification import build_summary_defs
+        # Rows are rounded once at ingestion, so the stored total equals the sum
+        # of the stored rows ($10 + $10 = $20), not round(10.4 + 10.4) = 21.
+        defs = build_summary_defs(by_faculty=[(None, [("A", 10.4, 0.0, 10.4),
+                                                     ("B", 10.4, 0.0, 10.4)])])
+        self.assertIn(r"\newcommand{\FacultySummaryADirect}{10}", defs)
+        self.assertIn(r"\newcommand{\FacultySummaryGrandDirect}{20}", defs)
+        self.assertNotIn("{21}", defs)
 
     def test_include_guard_both_modes(self):
         """Every generated .tex must emit a full document standalone and a bare
@@ -690,15 +697,17 @@ class JustificationContentTests(unittest.TestCase):
         ])
         # One column per funded year; unfunded years 4-5 are not printed.
         self.assertIn(r"Faculty & Year 1 & Year 2 & Year 3 & Total Requested \\", tex)
-        self.assertNotIn("Year 4", tex)
+        self.assertNotIn("Year 4 ", tex)
         self.assertIn(r"\begin{tabular}{lrrrr}", tex)
-        # Each PI's ask per year, with their row total.
-        self.assertIn(r"Dr. A & \$100 & \$110 & \$120 & \$330 \\", tex)
-        # Column totals and the grand total agree both ways: the year columns sum
-        # to 300/320/340 = 960, and the row totals 330 + 630 come to 960 too.
-        self.assertIn(r"\textbf{Total} & \textbf{\$300} & \textbf{\$320} & "
-                      r"\textbf{\$340} & \textbf{\$960} \\", tex)
+        # Figures are macro references, not literals.
+        self.assertIn(r"Dr. A & \${}\FacultySummaryDrAYearOne{} & "
+                      r"\${}\FacultySummaryDrAYearTwo{} & "
+                      r"\${}\FacultySummaryDrAYearThree{} & "
+                      r"\${}\FacultySummaryDrAYearsTotal{} \\", tex)
+        self.assertIn(r"\textbf{Total} & \textbf{\${}\FacultySummaryGrandYearOne{}}",
+                      tex)
         self.assertIn(r"\ifdefined\budgetjustificationincluded", tex)
+        self.assertIn(r"\input{\budgetjustificationpath faculty_summary_defs}", tex)
 
     def test_faculty_summary_by_year_grouped(self):
         from utkbudget.justification import build_faculty_summary_by_year
@@ -708,11 +717,11 @@ class JustificationContentTests(unittest.TestCase):
             ("Theory Frontier", [("Dr. C", [50.0, 55.0])]),
         ])
         self.assertIn(r"\multicolumn{4}{l}{\textbf{Energy Frontier}} \\", tex)
-        self.assertIn(r"\quad Dr. A & \$100 & \$110 & \$210 \\", tex)
-        self.assertIn(r"\textit{Energy Frontier subtotal} & \textit{\$300} & "
-                      r"\textit{\$320} & \textit{\$620} \\", tex)
-        self.assertIn(r"\textbf{Total} & \textbf{\$350} & \textbf{\$375} & "
-                      r"\textbf{\$725} \\", tex)
+        self.assertIn(r"\quad Dr. A & \${}\FacultySummaryEnergyFrontierDrAYearOne{}",
+                      tex)
+        self.assertIn(r"\textit{Energy Frontier subtotal} & "
+                      r"\textit{\${}\FacultySummaryEnergyFrontierSubtotalYearOne{}}",
+                      tex)
 
     def test_faculty_summary_grouped_by_thrust(self):
         from utkbudget.justification import build_faculty_summary
@@ -724,13 +733,55 @@ class JustificationContentTests(unittest.TestCase):
         # group headings (escaped) with the PIs indented beneath them
         self.assertIn(r"\multicolumn{4}{l}{\textbf{Energy Frontier}}", tex)
         self.assertIn(r"\multicolumn{4}{l}{\textbf{Theory\_Frontier}}", tex)
-        self.assertIn(r"\quad Dr. A & \$100 & \$50 & \$150 \\", tex)
-        # per-thrust subtotal = sum over that sub-folder
-        self.assertIn(r"\textit{Energy Frontier subtotal} & \textit{\$110} & "
-                      r"\textit{\$55} & \textit{\$165} \\", tex)
-        # grand total across all thrusts
-        self.assertIn(r"\textbf{Total} & \textbf{\$310} & \textbf{\$155} & "
-                      r"\textbf{\$465} \\", tex)
+        self.assertIn(r"\quad Dr. A & \${}\FacultySummaryEnergyFrontierDrADirect{}",
+                      tex)
+        self.assertIn(r"\textit{Energy Frontier subtotal} & "
+                      r"\textit{\${}\FacultySummaryEnergyFrontierSubtotalDirect{}}",
+                      tex)
+        self.assertIn(r"\textbf{Total} & \textbf{\${}\FacultySummaryGrandDirect{}}",
+                      tex)
+
+    def test_summary_defs_hold_the_sums(self):
+        from utkbudget.justification import build_summary_defs
+        defs = build_summary_defs(
+            by_faculty=[("Energy Frontier", [("Dr. A", 100.0, 50.0, 150.0),
+                                             ("Dr. B", 10.0, 5.0, 15.0)]),
+                        ("Theory Frontier", [("Dr. C", 200.0, 100.0, 300.0)])],
+            by_year=[("Energy Frontier", [("Dr. A", [60.0, 90.0]),
+                                          ("Dr. B", [5.0, 10.0])]),
+                     ("Theory Frontier", [("Dr. C", [100.0, 200.0])])])
+        # Per-PI figures.
+        self.assertIn(r"\newcommand{\FacultySummaryEnergyFrontierDrADirect}{100}",
+                      defs)
+        self.assertIn(r"\newcommand{\FacultySummaryEnergyFrontierDrATotal}{150}", defs)
+        # Per-thrust subtotals: 100+10 direct, 50+5 indirect, 150+15 total.
+        self.assertIn(r"\newcommand{\FacultySummaryEnergyFrontierSubtotalDirect}{110}",
+                      defs)
+        self.assertIn(r"\newcommand{\FacultySummaryEnergyFrontierSubtotalTotal}{165}",
+                      defs)
+        # Grand totals across every thrust.
+        self.assertIn(r"\newcommand{\FacultySummaryGrandDirect}{310}", defs)
+        self.assertIn(r"\newcommand{\FacultySummaryGrandTotal}{465}", defs)
+        # By-year figures share the same per-PI stem, with year suffixes.
+        self.assertIn(r"\newcommand{\FacultySummaryEnergyFrontierDrAYearOne}{60}", defs)
+        self.assertIn(r"\newcommand{\FacultySummaryEnergyFrontierDrAYearsTotal}{150}",
+                      defs)
+        self.assertIn(r"\newcommand{\FacultySummaryGrandYearOne}{165}", defs)
+        self.assertIn(r"\newcommand{\FacultySummaryGrandYearsTotal}{465}", defs)
+        # Load-once guard, so a document including both tables (each \input-ing
+        # this file) does not redefine every macro.
+        self.assertIn(r"\ifdefined\facultysummarydefsloaded\else", defs)
+        self.assertIn(r"\def\facultysummarydefsloaded{}", defs)
+        self.assertTrue(defs.rstrip().endswith(r"\fi"))
+
+    def test_summary_macro_names_keep_surnames_and_dedupe(self):
+        from utkbudget.justification import build_summary_defs
+        # "Dr. Lee" must not lose its surname to filename-extension stripping,
+        # and two people who sanitise to the same stem must not collide.
+        defs = build_summary_defs(by_faculty=[
+            (None, [("Dr. Lee", 1.0, 0.0, 1.0), ("Dr. Lee", 2.0, 0.0, 2.0)])])
+        self.assertIn(r"\newcommand{\FacultySummaryDrLeeDirect}{1}", defs)
+        self.assertIn(r"\newcommand{\FacultySummaryDrLeeTwoDirect}{2}", defs)
 
 
 class CliJustificationTests(unittest.TestCase):
@@ -804,7 +855,8 @@ class CliJustificationTests(unittest.TestCase):
             combined_text = fh.read()
         self.assertIn("Combined", combined_text)
 
-        # The faculty summary lists one row per PI (their final asks).
+        # The faculty summary lists one row per PI (their final asks), with the
+        # figures pulled from the shared summary defs file.
         summary = os.path.join(outdir, "faculty_summary.tex")
         self.assertTrue(os.path.exists(summary))
         with open(summary) as fh:
@@ -812,6 +864,9 @@ class CliJustificationTests(unittest.TestCase):
         self.assertIn("Alice", summary_text)
         self.assertIn("Bob", summary_text)
         self.assertIn(r"\textbf{Total}", summary_text)
+        self.assertIn(r"\input{\budgetjustificationpath faculty_summary_defs}",
+                      summary_text)
+        self.assertIn(r"\FacultySummaryGrandTotal{}", summary_text)
 
         # ...and the by-year summary is written alongside it.
         by_year = os.path.join(outdir, "faculty_summary_by_year.tex")
@@ -820,6 +875,19 @@ class CliJustificationTests(unittest.TestCase):
             by_year_text = fh.read()
         self.assertIn("Alice", by_year_text)
         self.assertIn("Year 1", by_year_text)
+        self.assertIn(r"\FacultySummaryGrandYearOne{}", by_year_text)
+
+        # The sums themselves live in one defs file both tables \input, so the
+        # numbers can be regenerated without touching either table's text.
+        sdefs = os.path.join(outdir, "faculty_summary_defs.tex")
+        self.assertTrue(os.path.exists(sdefs))
+        with open(sdefs) as fh:
+            sdefs_text = fh.read()
+        for macro in (r"\newcommand{\FacultySummaryAliceDirect}",
+                      r"\newcommand{\FacultySummaryAliceYearOne}",
+                      r"\newcommand{\FacultySummaryGrandTotal}",
+                      r"\newcommand{\FacultySummaryGrandYearsTotal}"):
+            self.assertIn(macro, sdefs_text)
 
     def test_grouped_output_is_flat_with_unique_names(self):
         from utkbudget.cli import run
