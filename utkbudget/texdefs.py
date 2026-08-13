@@ -35,19 +35,28 @@ _TEX_ESCAPES = {
 }
 
 
-def tex_prefix(name: str) -> str:
-    """Turn an arbitrary string into a valid (letters-only) LaTeX macro prefix.
+def tex_name(text: str) -> str:
+    """Letters-only LaTeX macro name from arbitrary text (digits -> words).
 
-    ``"Proposal_Budget 2.xlsx"`` -> ``"ProposalBudgetTwo"``.
+    ``"Dr. Lee (2)"`` -> ``"DrLeeTwo"``.  Unlike :func:`tex_prefix` this does not
+    strip a filename extension, so a name like ``"Dr. Lee"`` keeps its surname
+    instead of losing it to ``splitext``.
     """
-    base = os.path.splitext(os.path.basename(name))[0]
     out = []
-    for ch in base:
+    for ch in str(text):
         if ch.isalpha():
             out.append(ch)
         elif ch.isdigit():
             out.append(_DIGIT_WORDS[ch])
-    return "".join(out) or "Budget"
+    return "".join(out)
+
+
+def tex_prefix(name: str) -> str:
+    """Turn a *filename* into a valid (letters-only) LaTeX macro prefix.
+
+    ``"Proposal_Budget 2.xlsx"`` -> ``"ProposalBudgetTwo"``.
+    """
+    return tex_name(os.path.splitext(os.path.basename(name))[0]) or "Budget"
 
 
 def escape_tex(text: str) -> str:
