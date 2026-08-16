@@ -32,7 +32,7 @@ import sys
 import textwrap
 from typing import List, Tuple
 
-from .extractor import PERIOD_WORDS, Budget, extract_budget
+from .extractor import PERIOD_WORDS, Budget, extract_budget, round_dollar
 from .justification import (SUMMARY_DEFS_FILE, build_faculty_summary,
                             build_faculty_summary_by_year, build_pdf_driver,
                             build_summary_defs, write_document)
@@ -267,21 +267,39 @@ def _val(b: Budget, name: str) -> float:
         return 0.0
 
 
+def _years(b: Budget, base: str) -> List[int]:
+    """The per-period figures of a roll-up row, each rounded to the dollar.
+
+    Rounding happens HERE, once per year, and every total is then a sum of these
+    -- see :func:`_summed`."""
+    return [round_dollar(_val(b, f"{base}Year{w}")) for w in PERIOD_WORDS]
+
+
+def _summed(b: Budget, base: str) -> int:
+    """A total for the summary tables: round per year, then sum.
+
+    Deliberately NOT the spreadsheet's own total cell rounded once.  Both
+    summary tables have to agree with each other, so every figure in them is
+    built from the same rounded per-year values: a PI's row total in the
+    by-faculty table is exactly the sum of that PI's row in the by-year table.
+    The trade-off is that a figure here can differ by a dollar or two from the
+    corresponding cell in the spreadsheet, and Direct + Indirect need not equal
+    Total to the dollar -- accepted, so that the tables never contradict."""
+    return sum(_years(b, base))
+
+
 def _faculty_summary_entries(budgets: List[Budget]):
     """(faculty name, direct, indirect, total) for each budget, for the summary
     table -- one row per faculty with their final DOE ask."""
     return [(_pi_name(b) or "(unnamed)",
-             _val(b, "DirectTotal"), _val(b, "IndirectTotal"),
-             _val(b, "GrandTotal"))
+             _summed(b, "Direct"), _summed(b, "Indirect"), _summed(b, "Grand"))
             for b in budgets]
 
 
 def _faculty_year_entries(budgets: List[Budget]):
     """(faculty name, [per-period total, ...]) for the by-year summary table --
-    each PI's total request in each budget period."""
-    return [(_pi_name(b) or "(unnamed)",
-             [_val(b, f"GrandYear{w}") for w in PERIOD_WORDS])
-            for b in budgets]
+    each PI's total request in each budget period, rounded per year."""
+    return [(_pi_name(b) or "(unnamed)", _years(b, "Grand")) for b in budgets]
 
 
 def _write_faculty_summary(output_dir: str, budgets: List[Budget] = None,

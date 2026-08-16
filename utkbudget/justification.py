@@ -596,7 +596,13 @@ def build_summary_defs(by_faculty=None, by_year=None) -> str:
 
     ``by_faculty`` is the grouped ``(name, [(label, direct, indirect, total)])``
     data and ``by_year`` the grouped ``(name, [(label, [year, ...])])`` data;
-    each contributes its own suffixes under a shared per-person stem."""
+    each contributes its own suffixes under a shared per-person stem.
+
+    ROUNDING RULE: figures arrive already rounded per year and every total is a
+    sum of those (see :func:`utkbudget.cli._summed`), so the two tables always
+    agree -- a PI's ``Total`` here is by construction their ``YearsTotal``.
+    Rounding again below is therefore a no-op on the values the CLI passes; it
+    only guards against a caller handing in raw floats."""
     lines = [provenance_comment()]
     lines.append(
         "% Every summed figure in the two faculty summary tables.  The tables\n"

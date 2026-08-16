@@ -774,6 +774,46 @@ class JustificationContentTests(unittest.TestCase):
         self.assertIn(r"\def\facultysummarydefsloaded{}", defs)
         self.assertTrue(defs.rstrip().endswith(r"\fi"))
 
+    def test_summary_tables_agree_round_per_year_then_sum(self):
+        """The by-faculty and by-year tables must never contradict each other.
+
+        Rounding the project total once (100.4*3 = 301.2 -> 301) instead of
+        summing the rounded years (100 + 100 + 100 = 300) drifts by a dollar per
+        PI, which is what put the two tables $2 apart."""
+        from utkbudget.cli import _faculty_summary_entries, _faculty_year_entries
+        from utkbudget.extractor import Budget, KIND_MONEY, KIND_TEXT
+
+        def budget(name, years):
+            b = Budget(source=name)
+            b.add("PINames", name, KIND_TEXT)
+            for base, scale in (("Grand", 1.0), ("Direct", 0.6), ("Indirect", 0.4)):
+                total = 0.0
+                for w, v in zip(["One", "Two", "Three", "Four", "Five"], years):
+                    b.add(f"{base}Year{w}", v * scale, KIND_MONEY)
+                    total += v * scale
+                # The spreadsheet's own total cell: the value we must NOT use.
+                b.add(f"{base}Total", total, KIND_MONEY)
+            return b
+
+        # Each year ends in .4, so per-year rounding loses more than rounding the
+        # total once -- the two approaches disagree.
+        budgets = [budget("Dr. A", [100.4, 100.4, 100.4]),
+                   budget("Dr. B", [200.4, 200.4, 200.4])]
+        fac = _faculty_summary_entries(budgets)
+        yrs = _faculty_year_entries(budgets)
+
+        # Per PI: the by-faculty total IS the sum of the by-year row.
+        for (name, _d, _i, total), (yname, years) in zip(fac, yrs):
+            self.assertEqual(name, yname)
+            self.assertEqual(total, sum(years),
+                             f"{name}: total {total} != sum of years {years}")
+        # And it is the round-then-sum value (300), not the sum-then-round (301).
+        self.assertEqual(fac[0][3], 300)
+        self.assertEqual(yrs[0][1], [100, 100, 100, 0, 0])
+        # Grand totals agree across the two tables.
+        self.assertEqual(sum(e[3] for e in fac),
+                         sum(v for _, years in yrs for v in years))
+
     def test_summary_macro_names_keep_surnames_and_dedupe(self):
         from utkbudget.justification import build_summary_defs
         # "Dr. Lee" must not lose its surname to filename-extension stripping,
