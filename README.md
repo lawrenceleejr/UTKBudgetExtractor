@@ -249,6 +249,16 @@ that ship with the template and are never touched.
   values written into the merged workbook (consolidated travel, supplies, and
   summed manual rows) — is rounded to the nearest whole dollar. Values *copied*
   from the inputs (base salaries, equipment amounts, ...) are never altered.
+
+- **In the summary tables: round per year, then sum.** Every figure in
+  `faculty_summary_defs.tex` is built from per-year values rounded to the dollar,
+  and every total (a PI's row total, a per-thrust subtotal, the grand total) is
+  the sum of those — never the spreadsheet's own total cell rounded once. This is
+  what keeps the two tables consistent with each other: a PI's `Total` in the
+  by-faculty table is by construction the sum of their row in the by-year table.
+  The trade-off, accepted deliberately, is that such a total can sit a dollar or
+  two off the corresponding cell in the spreadsheet, and `Direct` + `Indirect`
+  need not equal `Total` to the dollar.
 - **Workbook-wide inputs are checked for conflicts.** Some inputs cannot be
   summed — the salary/tuition inflation rates, the F&A base and rate type, and
   the per-GRA tuition/fee costs apply to the whole workbook. The merge carries
