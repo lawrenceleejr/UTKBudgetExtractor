@@ -9,15 +9,15 @@ Point the tool at a folder of UTK "Proposal Budget" spreadsheets
 and it produces, for **every** input file:
 
 1. **A LaTeX definitions file** named after the input (`PI_Smith.xlsx` →
-   `PI_Smith.tex`) containing every labelled number as a `\newcommand`, ready to
-   `\input` into a proposal or justification.
+   `defs/PI_Smith.tex`) containing every labelled number as a `\newcommand`,
+   ready to `\input` into a proposal or justification.
 2. **A DOE budget justification for that input** (`PI_Smith_justification.tex`)
    — only that budget, with travel called out in detail. It `\input`s its own
    defs file (item 1), so it both compiles on its own and drops into a larger
    proposal (see [Including justifications](#including-justifications)).
 3. **A merged Excel workbook** (`merged.xlsx`) **in the same format as the
    inputs**, combining all of the budgets (see [Merging](#how-the-merge-works)).
-4. **Merged LaTeX definitions** (`merged.tex`) for the combined budget.
+4. **Merged LaTeX definitions** (`defs/merged.tex`) for the combined budget.
 5. **A separate combined-total justification** (`justification.tex`) for the
    summed budget.
 6. **A driver** (`all_justifications.tex`) that pulls the whole request into one
@@ -30,12 +30,15 @@ and it produces, for **every** input file:
    glance). With program sub-folders (a multi-thrust proposal, e.g. `Energy
    Frontier/`, `Intensity Frontier/`, `Theory Frontier/`), both group the PIs
    under each sub-folder's name with a per-thrust subtotal.
-8. **The summed figures behind those tables** (`faculty_summary_defs.tex`) as
-   `\newcommand`s — see [Summary figures as
+8. **The summed figures behind those tables** (`defs/faculty_summary_defs.tex`)
+   as `\newcommand`s — see [Summary figures as
    macros](#summary-figures-as-macros).
 
-All generated files land in **one flat output directory** — no sub-folders — so
-they are easy to `\input` from a single place.
+Documents land in **one flat output directory**, and every `\newcommand` file
+goes in a **`defs/` sub-folder** beneath it. Nothing but definitions lives in
+`defs/`, so on a re-run you can copy that one folder over an existing proposal
+tree to refresh every number without touching justification or table text you
+have edited.
 
 ## Install
 
@@ -64,17 +67,18 @@ produces
 
 ```
 output/
-├── PI_Smith.tex                 # \newcommand defs for Smith
-├── PI_Smith_justification.tex   # Smith's justification (\input's PI_Smith.tex)
-├── PI_Jones.tex                 # \newcommand defs for Jones
-├── PI_Jones_justification.tex   # Jones's justification (\input's PI_Jones.tex)
+├── defs/                        # ALL \newcommand files -- only numbers here
+│   ├── PI_Smith.tex             #   defs for Smith
+│   ├── PI_Jones.tex             #   defs for Jones
+│   ├── merged.tex               #   defs for the sum
+│   └── faculty_summary_defs.tex #   the summary tables' summed figures
+├── PI_Smith_justification.tex   # Smith's justification (\input's defs/PI_Smith)
+├── PI_Jones_justification.tex   # Jones's justification (\input's defs/PI_Jones)
 ├── merged.xlsx                  # Smith + Jones, summed
-├── merged.tex                   # \newcommand defs for the sum
 ├── justification.tex            # combined-total justification (the sum)
 ├── all_justifications.tex       # summaries + combined + each justification
 ├── faculty_summary.tex          # one-row-per-faculty request table
-├── faculty_summary_by_year.tex  # one row per faculty, one column per year
-└── faculty_summary_defs.tex     # the summed figures, as \newcommand macros
+└── faculty_summary_by_year.tex  # one row per faculty, one column per year
 ```
 
 ### Folder with program sub-folders
@@ -94,33 +98,36 @@ budgets/
     └── PI_Richers.xlsx
 ```
 
-produces — everything in **one flat directory**, no sub-folders:
+produces — documents flat, definitions under `defs/`:
 
 ```
 output/
-├── PI_Smith.tex                    # defs, one per input file
-├── PI_Smith_justification.tex      # Smith only (\input's PI_Smith.tex)
-├── PI_Jones.tex
+├── defs/                           # ALL \newcommand files -- only numbers here
+│   ├── PI_Smith.tex                #   defs, one per input file
+│   ├── PI_Jones.tex
+│   ├── PI_Lee.tex                  #   (from Program 2)
+│   ├── PI_Richers.tex              #   (from Program 3)
+│   ├── ProgramOne_merged.tex       #   per-program merged defs
+│   ├── ProgramTwo_merged.tex  ...
+│   ├── merged.tex                  #   defs for the grand total
+│   └── faculty_summary_defs.tex    #   the summary tables' summed figures
+├── PI_Smith_justification.tex      # Smith only (\input's defs/PI_Smith)
 ├── PI_Jones_justification.tex
-├── PI_Lee.tex                      # (from Program 2)
 ├── PI_Lee_justification.tex
-├── PI_Richers.tex                  # (from Program 3)
 ├── PI_Richers_justification.tex
-├── ProgramOne_merged.xlsx          # per-program merged workbook + defs
-├── ProgramOne_merged.tex
+├── ProgramOne_merged.xlsx          # per-program merged workbook
 ├── ProgramOne_justification.tex    # Program 1 combined total
 ├── ProgramTwo_merged.xlsx  ...     # likewise for the other programs
 ├── merged.xlsx                     # fully merged across every program
-├── merged.tex                      # defs for the grand total
 ├── justification.tex               # per-program + fully merged grand total
 ├── all_justifications.tex          # summaries + combined + each justification
 ├── faculty_summary.tex             # PIs grouped by program, per-program subtotals
-├── faculty_summary_by_year.tex     # PIs by program x year, per-program subtotals
-└── faculty_summary_defs.tex        # the summed figures, as \newcommand macros
+└── faculty_summary_by_year.tex     # PIs by program x year, per-program subtotals
 ```
 
 If two programs hold a like-named spreadsheet, the second one's outputs get a
-`_2` suffix (`PI_Smith_2.tex`) rather than overwriting the first.
+`_2` suffix (`defs/PI_Smith_2.tex`, `PI_Smith_2_justification.tex`) rather than
+overwriting the first.
 
 ## Including the generated LaTeX
 
@@ -157,7 +164,8 @@ latexmk -pdf output/all_justifications.tex      # or: pdflatex it twice
 
 Neither summary table hard-codes a dollar amount. Every figure in them — each
 PI's row, each per-thrust subtotal, and the grand totals — is a `\newcommand`
-defined in `faculty_summary_defs.tex`, which both tables `\input` automatically.
+defined in `defs/faculty_summary_defs.tex`, which both tables `\input`
+automatically.
 Re-running the tool rewrites only that file, so **the numbers update and the
 surrounding text stays exactly as it is** — including any edits you have made to
 the generated tables.
@@ -166,7 +174,7 @@ The macros are named after the thrust and the faculty member, so you can pull th
 same figures into your own prose:
 
 ```latex
-\input{output/faculty_summary_defs}     % the tables do this for you
+\input{output/defs/faculty_summary_defs}   % the tables do this for you
 ...
 We request a total of \$\FacultySummaryGrandTotal{} over the project period,
 of which \$\FacultySummaryEnergyFrontierSubtotalTotal{} supports the Energy
@@ -186,7 +194,7 @@ read off the macro you want.
 ## Using the output in a proposal
 
 ```latex
-\input{output/merged.tex}          % defines \CombinedGrandTotal, etc.
+\input{output/defs/merged.tex}     % defines \CombinedGrandTotal, etc.
 ...
 We request a total of \$\CombinedGrandTotal{} from the Department of Energy,
 including \$\CombinedTravelTotal{} for travel.
@@ -251,7 +259,8 @@ that ship with the template and are never touched.
   from the inputs (base salaries, equipment amounts, ...) are never altered.
 
 - **In the summary tables: round per year, then sum.** Every figure in
-  `faculty_summary_defs.tex` is built from per-year values rounded to the dollar,
+  `defs/faculty_summary_defs.tex` is built from per-year values rounded to the
+  dollar,
   and every total (a PI's row total, a per-thrust subtotal, the grand total) is
   the sum of those — never the spreadsheet's own total cell rounded once. This is
   what keeps the two tables consistent with each other: a PI's `Total` in the

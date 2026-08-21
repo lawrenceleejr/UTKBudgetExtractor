@@ -612,7 +612,7 @@ class JustificationContentTests(unittest.TestCase):
         self.assertNotIn(r"\$450", tex)
         # includable via the same guard as the justifications
         self.assertIn(r"\ifdefined\budgetjustificationincluded", tex)
-        self.assertIn(r"\input{\budgetjustificationpath faculty_summary_defs}", tex)
+        self.assertIn(r"\input{\budgetjustificationpath defs/faculty_summary_defs}", tex)
 
     def test_faculty_summary_totals_consistent_after_rounding(self):
         from utkbudget.justification import build_summary_defs
@@ -707,7 +707,7 @@ class JustificationContentTests(unittest.TestCase):
         self.assertIn(r"\textbf{Total} & \textbf{\${}\FacultySummaryGrandYearOne{}}",
                       tex)
         self.assertIn(r"\ifdefined\budgetjustificationincluded", tex)
-        self.assertIn(r"\input{\budgetjustificationpath faculty_summary_defs}", tex)
+        self.assertIn(r"\input{\budgetjustificationpath defs/faculty_summary_defs}", tex)
 
     def test_faculty_summary_by_year_grouped(self):
         from utkbudget.justification import build_faculty_summary_by_year
@@ -839,7 +839,7 @@ class CliJustificationTests(unittest.TestCase):
         run(indir, outdir)
 
         smith = os.path.join(outdir, "PI_Smith_justification.tex")
-        defs = os.path.join(outdir, "PI_Smith.tex")
+        defs = os.path.join(outdir, "defs", "PI_Smith.tex")
         combined = os.path.join(outdir, "justification.tex")
         driver = os.path.join(outdir, "all_justifications.tex")
         for p in (smith, defs, combined, driver):
@@ -849,7 +849,7 @@ class CliJustificationTests(unittest.TestCase):
             smith_text = fh.read()
         # It \input{}s its dedicated defs file (not inlined) and uses that file's
         # unique macro prefix; the include guard lets it be dropped into a proposal.
-        self.assertIn(r"\input{\budgetjustificationpath PI_Smith}", smith_text)
+        self.assertIn(r"\input{\budgetjustificationpath defs/PI_Smith}", smith_text)
         self.assertNotIn(r"\newcommand{", smith_text)  # defs live in the defs file
         self.assertIn(r"\ifdefined\budgetjustificationincluded", smith_text)
         self.assertIn(r"\PISmith", smith_text)          # unique-prefix macro
@@ -904,7 +904,7 @@ class CliJustificationTests(unittest.TestCase):
         self.assertIn("Alice", summary_text)
         self.assertIn("Bob", summary_text)
         self.assertIn(r"\textbf{Total}", summary_text)
-        self.assertIn(r"\input{\budgetjustificationpath faculty_summary_defs}",
+        self.assertIn(r"\input{\budgetjustificationpath defs/faculty_summary_defs}",
                       summary_text)
         self.assertIn(r"\FacultySummaryGrandTotal{}", summary_text)
 
@@ -919,7 +919,7 @@ class CliJustificationTests(unittest.TestCase):
 
         # The sums themselves live in one defs file both tables \input, so the
         # numbers can be regenerated without touching either table's text.
-        sdefs = os.path.join(outdir, "faculty_summary_defs.tex")
+        sdefs = os.path.join(outdir, "defs", "faculty_summary_defs.tex")
         self.assertTrue(os.path.exists(sdefs))
         with open(sdefs) as fh:
             sdefs_text = fh.read()
@@ -943,15 +943,26 @@ class CliJustificationTests(unittest.TestCase):
         outdir = os.path.join(tmp, "out")
         run(indir, outdir)
 
-        # Every output sits directly in outdir -- no sub-directories at all.
-        self.assertEqual([d for d in os.listdir(outdir)
-                          if os.path.isdir(os.path.join(outdir, d))], [])
+        # Exactly one sub-directory: defs/.  Everything else is flat, so the
+        # per-program sub-folders are gone.
+        self.assertEqual([d for d in sorted(os.listdir(outdir))
+                          if os.path.isdir(os.path.join(outdir, d))], ["defs"])
         names = sorted(os.listdir(outdir))
-        # The colliding stem was disambiguated rather than overwritten.
-        self.assertIn("PI_Budget.tex", names)
-        self.assertIn("PI_Budget_2.tex", names)
+        defs_names = sorted(os.listdir(os.path.join(outdir, "defs")))
+
+        # Definitions live ONLY under defs/, documents ONLY in the root, so the
+        # numbers can be refreshed by replacing that one folder.
+        self.assertIn("PI_Budget.tex", defs_names)
+        self.assertIn("PI_Budget_2.tex", defs_names)          # stem disambiguated
+        self.assertIn("faculty_summary_defs.tex", defs_names)
+        self.assertNotIn("PI_Budget.tex", names)
         self.assertIn("PI_Budget_justification.tex", names)
         self.assertIn("PI_Budget_2_justification.tex", names)
+        self.assertNotIn("PI_Budget_justification.tex", defs_names)
+        for fname in defs_names:
+            with open(os.path.join(outdir, "defs", fname)) as fh:
+                self.assertIn(r"\newcommand{", fh.read(), f"{fname} is not defs")
+
         # Both PIs survive, one per justification.
         with open(os.path.join(outdir, "PI_Budget_justification.tex")) as fh:
             first = fh.read()
@@ -959,12 +970,13 @@ class CliJustificationTests(unittest.TestCase):
             second = fh.read()
         self.assertNotEqual(first, second)
         self.assertEqual({"Alice" in first, "Alice" in second}, {True, False})
-        # The driver references both, by bare name (same flat directory).
+        # Each justification reaches its defs through defs/.
+        self.assertIn(r"\input{\budgetjustificationpath defs/PI_Budget}", first)
+        # The driver references the documents by bare name (same directory).
         with open(os.path.join(outdir, "all_justifications.tex")) as fh:
             driver = fh.read()
         for stem in ("PI_Budget_justification", "PI_Budget_2_justification"):
             self.assertIn(r"\input{\budgetjustificationpath " + stem + "}", driver)
-        self.assertNotIn("/", driver.split(r"\begin{document}")[-1])
 
 
 class ProvenanceTests(unittest.TestCase):

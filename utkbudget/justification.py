@@ -424,6 +424,11 @@ def _input(rel: str) -> str:
     return f"\\input{{{PATH_MACRO} {base}}}"
 
 
+def defs_input(name: str) -> str:
+    """The output-root-relative ``\\input`` path of a defs file in ``defs/``."""
+    return f"{DEFS_DIR}/{name}"
+
+
 def build_document(
     title: str,
     defs_inputs: Sequence[str],
@@ -546,6 +551,10 @@ def build_pdf_driver(justifications: Sequence[str],
     return "\n\n".join(out) + "\n"
 
 
+# Every \newcommand file goes in this sub-directory of the output root, so a
+# re-run's numbers can be dropped in wholesale (copy over `defs/`) without
+# touching the justification/table text that lives beside it.
+DEFS_DIR = "defs"
 SUMMARY_DEFS_FILE = "faculty_summary_defs.tex"
 SUMMARY_MACRO_PREFIX = "FacultySummary"
 # Guards the defs file against being loaded twice (both summary tables \input
@@ -701,14 +710,15 @@ def build_faculty_summary(entries=None, title: str = "DOE Budget Request by Facu
         "% Summary table: one row per faculty with their DOE request.  Compiles\n"
         "% on its own; to \\input it into a larger document, put\n"
         "% \\def\\budgetjustificationincluded{} in that document's preamble first.\n"
-        "% The figures come from " + SUMMARY_DEFS_FILE + ", \\input just below.")
+        "% The figures come from " + defs_input(SUMMARY_DEFS_FILE) + ",\n"
+        "% \\input just below.")
     out.append(_path_preamble())
     out.append(
         f"\\ifdefined{INCLUDE_GUARD}\\else\n"
         + PREAMBLE
         + f"\\title{{{escape_tex(title)}}}\n"
         + "\\begin{document}\n\\maketitle\n\\fi")
-    out.append(_input(SUMMARY_DEFS_FILE))
+    out.append(_input(defs_input(SUMMARY_DEFS_FILE)))
 
     lines = ["\\begin{center}", "\\begin{tabular}{lrrr}", "\\hline",
              "Faculty & Direct Costs & Indirect (F\\&A) & Total Requested \\\\",
@@ -788,14 +798,15 @@ def build_faculty_summary_by_year(
         "% per year per PI is visible at a glance.  Compiles on its own; to\n"
         "% \\input it into a larger document, put\n"
         "% \\def\\budgetjustificationincluded{} in that document's preamble first.\n"
-        "% The figures come from " + SUMMARY_DEFS_FILE + ", \\input just below.")
+        "% The figures come from " + defs_input(SUMMARY_DEFS_FILE) + ",\n"
+        "% \\input just below.")
     out.append(_path_preamble())
     out.append(
         f"\\ifdefined{INCLUDE_GUARD}\\else\n"
         + PREAMBLE
         + f"\\title{{{escape_tex(title)}}}\n"
         + "\\begin{document}\n\\maketitle\n\\fi")
-    out.append(_input(SUMMARY_DEFS_FILE))
+    out.append(_input(defs_input(SUMMARY_DEFS_FILE)))
 
     header = " & ".join(f"Year {i + 1}" for i in active)
     lines = ["\\begin{center}",
