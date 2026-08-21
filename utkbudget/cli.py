@@ -3,7 +3,9 @@
 Hand the tool a folder of UTK proposal-budget spreadsheets and it will, for
 every ``.xlsx`` input, write:
 
-* ``<input>.tex`` -- a LaTeX ``\\newcommand`` definition file (one per input);
+* ``defs/<input>.tex`` -- a LaTeX ``\\newcommand`` definition file (one per
+  input).  EVERY generated defs file goes under ``defs/`` and nothing else does,
+  so a re-run's numbers can be dropped in by replacing that one folder;
 * ``<input>_justification.tex`` -- a DOE-style justification for that budget
   that ``\\input``s its own defs file, so it compiles on its own and drops
   straight into a larger proposal;
@@ -13,15 +15,17 @@ every ``.xlsx`` input, write:
 * ``all_justifications.tex`` -- every justification in one document
   (``latexmk -pdf all_justifications.tex``);
 * ``faculty_summary.tex`` / ``faculty_summary_by_year.tex`` -- request tables,
-  one row per faculty (the latter with one column per year).
+  one row per faculty (the latter with one column per year), whose figures come
+  from ``defs/faculty_summary_defs.tex``.
 
 If the folder instead contains *sub-folders* (e.g. ``Program 1``,
 ``Program 2``, ``Program 3``), each sub-folder is treated as a program and gets
 its own merged workbook, definitions, and justifications, and a fully merged
 version across every program is produced.
 
-Every generated file is written into ONE flat output directory -- no
-sub-directories -- so a larger document can ``\\input`` them all from one place.
+Documents are written into ONE flat output directory with every
+``\\newcommand`` file under ``defs/``, so a larger document can ``\\input`` them
+all from one place and refresh the numbers by replacing ``defs/`` alone.
 """
 
 from __future__ import annotations
@@ -33,9 +37,9 @@ import textwrap
 from typing import List, Tuple
 
 from .extractor import PERIOD_WORDS, Budget, extract_budget, round_dollar
-from .justification import (SUMMARY_DEFS_FILE, build_faculty_summary,
+from .justification import (DEFS_DIR, SUMMARY_DEFS_FILE, build_faculty_summary,
                             build_faculty_summary_by_year, build_pdf_driver,
-                            build_summary_defs, write_document)
+                            build_summary_defs, defs_input, write_document)
 from .merge import (MergeIssue, RowOverflow, ValueConflict, merge_budgets,
                     write_merged_workbook)
 from .texdefs import escape_tex, tex_prefix, write_defs
@@ -176,8 +180,10 @@ def process_group(name: str, files: List[str], out_dir: str,
     that file's dedicated defs file, so a single PI can compile theirs (or drop
     it into a larger proposal).  The combined-total justification is separate.
 
-    Every group writes into the SAME flat ``out_dir`` -- no sub-directories --
-    so ``used_names`` is threaded through all the groups to keep like-named
+    Every group writes into the SAME ``out_dir``: the documents (justifications,
+    tables) directly in it and every ``\\newcommand`` file under ``defs/``, so a
+    re-run's numbers can be dropped in by replacing that one folder.
+    ``used_names`` is threaded through all the groups to keep like-named
     spreadsheets in different program folders from overwriting each other.
 
     Returns ``(merged_budget, group_merged_tex_path, budgets,
@@ -191,7 +197,7 @@ def process_group(name: str, files: List[str], out_dir: str,
         merged_xlsx_name = "merged.xlsx"
         merged_tex_name = "merged.tex"
         just_name = "justification.tex"
-    os.makedirs(out_dir, exist_ok=True)
+    os.makedirs(os.path.join(out_dir, DEFS_DIR), exist_ok=True)
     if used_names is None:
         used_names = set()
     print(f"\n=== {name}: {len(files)} file(s) -> {out_dir} ===")
@@ -211,7 +217,7 @@ def process_group(name: str, files: List[str], out_dir: str,
         base = _unique_name(base, used_names)
 
         tex_name = f"{base}.tex"
-        write_defs(budget, prefix, os.path.join(out_dir, tex_name))
+        write_defs(budget, prefix, os.path.join(out_dir, DEFS_DIR, tex_name))
 
         # Justification for this single budget: it \input{}s its own dedicated
         # defs file (unique prefix), so the numbers live in one place and the
@@ -223,7 +229,7 @@ def process_group(name: str, files: List[str], out_dir: str,
             ind_path,
             title="Budget Justification",
             subtitle=_pi_name(budget) or None,   # PI name as a subtitle
-            defs_inputs=[tex_name],
+            defs_inputs=[defs_input(tex_name)],
             sections=[(prefix, budget, None, False, True)],
             intro="",                            # no boilerplate lead sentence
         )
@@ -239,7 +245,8 @@ def process_group(name: str, files: List[str], out_dir: str,
     if issues:
         warn_merge_issues(name, merged_xlsx, issues)
 
-    write_defs(merged, group_prefix, os.path.join(out_dir, merged_tex_name),
+    merged_tex_path = os.path.join(out_dir, DEFS_DIR, merged_tex_name)
+    write_defs(merged, group_prefix, merged_tex_path,
                header_note=f"Merged total for {name}")
 
     # Separate combined-total justification (the sum only).
@@ -247,7 +254,7 @@ def process_group(name: str, files: List[str], out_dir: str,
     write_document(
         just_path,
         title=f"Budget Justification --- {name} (Combined)",
-        defs_inputs=[merged_tex_name],
+        defs_inputs=[defs_input(merged_tex_name)],
         sections=[(group_prefix, merged, None, True, False)],
         intro=("This document justifies the combined budget -- the sum of the "
                f"{len(files)} contributing budget(s) in {escape_tex(name)} -- "
@@ -255,8 +262,7 @@ def process_group(name: str, files: List[str], out_dir: str,
     )
     print(f"  wrote {os.path.relpath(just_path)}")
 
-    return (merged, os.path.join(out_dir, merged_tex_name), budgets,
-            individual_paths, just_path)
+    return (merged, merged_tex_path, budgets, individual_paths, just_path)
 
 
 def _val(b: Budget, name: str) -> float:
@@ -315,7 +321,8 @@ def _write_faculty_summary(output_dir: str, budgets: List[Budget] = None,
 
     # The summed figures live in their own defs file; both tables \input it and
     # reference the macros, so re-running updates numbers and not text.
-    defs_path = os.path.join(output_dir, SUMMARY_DEFS_FILE)
+    defs_path = os.path.join(output_dir, DEFS_DIR, SUMMARY_DEFS_FILE)
+    os.makedirs(os.path.dirname(defs_path), exist_ok=True)
     with open(defs_path, "w") as fh:
         fh.write(build_summary_defs(
             by_faculty=[(name, _faculty_summary_entries(bs)) for name, bs in groups],
@@ -408,8 +415,9 @@ def run(input_dir: str, output_dir: str) -> None:
         all_just_paths.extend(individual_paths)   # combined-per-program omitted
                                                   # from the booklet (the master
                                                   # already sums each program)
-        # Relative path from output_dir for the master document's \input
-        rel = os.path.relpath(merged_tex_path, output_dir)
+        # Output-root-relative \input path for the master document (forward
+        # slashes: this goes into LaTeX, not into the filesystem).
+        rel = os.path.relpath(merged_tex_path, output_dir).replace(os.sep, "/")
         master_defs_inputs.append(rel)
         master_sections.append((gprefix, merged, name, False, False))
 
@@ -422,9 +430,10 @@ def run(input_dir: str, output_dir: str) -> None:
     if issues:
         warn_merge_issues("All Programs", grand_xlsx, issues)
 
-    write_defs(grand, GRAND_PREFIX, os.path.join(output_dir, "merged.tex"),
+    write_defs(grand, GRAND_PREFIX,
+               os.path.join(output_dir, DEFS_DIR, "merged.tex"),
                header_note="Fully merged total across all programs")
-    master_defs_inputs.append("merged.tex")
+    master_defs_inputs.append(defs_input("merged.tex"))
     master_sections.append((GRAND_PREFIX, grand, "All Programs (Combined)", True, False))
 
     master_just = os.path.join(output_dir, "justification.tex")
